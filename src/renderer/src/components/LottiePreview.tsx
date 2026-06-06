@@ -4,6 +4,27 @@ import { Pause, Play, RotateCcw } from 'lucide-react';
 import { useCompilerStore } from '../store/compiler-store';
 import { summarizeLottie } from '../engine/animation-spec';
 
+type JsonRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): JsonRecord {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
+}
+
+function numberValue(value: unknown): number | null {
+  const number = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function createPreviewAnimationData(lottieOutput: object): object {
+  const output = JSON.parse(JSON.stringify(lottieOutput)) as JsonRecord;
+  const ip = numberValue(output.ip) ?? 0;
+  const op = numberValue(output.op) ?? 0;
+  if (op - ip > 1) {
+    output.op = op - 1;
+  }
+  return output;
+}
+
 export function LottiePreview() {
   const lottieOutput = useCompilerStore((s) => s.lottieOutput);
   const isCompiling = useCompilerStore((s) => s.isCompiling);
@@ -23,6 +44,7 @@ export function LottiePreview() {
     const container = containerRef.current;
     if (!lottieOutput || !container) return;
     const previewContainer: HTMLDivElement = container;
+    const currentOutput = lottieOutput;
 
     let cancelled = false;
     let animation: AnimationItem | null = null;
@@ -30,7 +52,7 @@ export function LottiePreview() {
 
     previewContainer.innerHTML = '';
     setPreviewError(null);
-    setIsPlaying(false);
+    setIsPlaying(true);
     setCurrentFrame(0);
     setTotalFrames(0);
 
@@ -40,12 +62,14 @@ export function LottiePreview() {
         if (cancelled) return;
 
         previewContainer.innerHTML = '';
+        const animationData = createPreviewAnimationData(currentOutput);
+        const previewRoot = asRecord(animationData);
         animation = lottie.loadAnimation({
           container: previewContainer,
           renderer: 'svg',
-          animationData: lottieOutput,
+          animationData,
           loop: true,
-          autoplay: false,
+          autoplay: true,
           rendererSettings: {
             preserveAspectRatio: 'xMidYMid meet',
             progressiveLoad: true,
@@ -56,7 +80,7 @@ export function LottiePreview() {
 
         const syncFrameInfo = () => {
           if (!animation) return;
-          const frames = animation.totalFrames || animation.getDuration(true) || 0;
+          const frames = animation.totalFrames || animation.getDuration(true) || numberValue(previewRoot.op) || 0;
           setTotalFrames(Math.max(0, Math.round(frames)));
           setCurrentFrame(Math.max(0, Math.round(animation.currentFrame || 0)));
         };
@@ -68,7 +92,8 @@ export function LottiePreview() {
 
         const handleLoaded = () => {
           syncFrameInfo();
-          animation?.goToAndStop(0, true);
+          animation?.play();
+          setIsPlaying(true);
         };
 
         const handleFailed = () => {
@@ -167,7 +192,7 @@ export function LottiePreview() {
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="relative flex-1 min-h-0 rounded-xl overflow-hidden bg-[linear-gradient(45deg,#f1f5f9_25%,transparent_25%),linear-gradient(-45deg,#f1f5f9_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#f1f5f9_75%),linear-gradient(-45deg,transparent_75%,#f1f5f9_75%)] bg-[length:24px_24px] bg-[position:0_0,0_12px,12px_-12px,-12px_0] dark:bg-neutral-950">
+      <div className="relative flex-1 min-h-0 rounded-xl overflow-hidden bg-[#f8fafc] bg-[linear-gradient(45deg,#e2e8f0_25%,transparent_25%),linear-gradient(-45deg,#e2e8f0_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#e2e8f0_75%),linear-gradient(-45deg,transparent_75%,#e2e8f0_75%)] bg-[length:24px_24px] bg-[position:0_0,0_12px,12px_-12px,-12px_0]">
         <div ref={containerRef} className="w-full h-full flex items-center justify-center min-h-0 [&>svg]:max-w-full [&>svg]:max-h-full" />
         {previewError && (
           <div className="absolute inset-0 flex items-center justify-center p-4 bg-white/80 text-center text-sm text-red-500 dark:bg-neutral-950/80">

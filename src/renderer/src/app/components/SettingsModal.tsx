@@ -17,13 +17,13 @@ import {
 import { fetchAI, getSetting, setSetting } from '../../ipc/tauri-api';
 import { useCompilerStore } from '../../store/compiler-store';
 import { modelsUrlFromEndpoint } from '../../engine/ai-endpoint';
+import { isThemeMode, setAppTheme, type ThemeMode } from '../theme';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-type ThemeMode = 'light' | 'dark' | 'system';
 type VerifyStatus = 'idle' | 'success' | 'error';
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
@@ -31,7 +31,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const savedApiKey = useCompilerStore((state) => state.apiKey);
   const savedModelName = useCompilerStore((state) => state.modelName);
   const setApiConfig = useCompilerStore((state) => state.setApiConfig);
-  const [activeTab, setActiveTab] = useState<'general' | 'api'>('api');
+  const [activeTab, setActiveTab] = useState<'general' | 'api'>('general');
   const [showApiKey, setShowApiKey] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>('light');
   const [apiBaseUrl, setApiBaseUrl] = useState(savedApiBaseUrl);
@@ -72,16 +72,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
         }
         if (isThemeMode(savedTheme)) {
           setTheme(savedTheme);
-          applyTheme(savedTheme);
+          void setAppTheme(savedTheme);
         } else {
-          applyTheme('light');
+          void setAppTheme('light');
         }
       } catch {
-        applyTheme('light');
+        void setAppTheme('light');
       }
     }
 
-    if (isOpen) void loadSettings();
+    if (isOpen) {
+      setActiveTab('general');
+      void loadSettings();
+    }
   }, [isOpen, setApiConfig]);
 
   const persistApiBaseUrl = async (value: string) => {
@@ -104,7 +107,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
   const handleThemeChange = async (value: ThemeMode) => {
     setTheme(value);
-    applyTheme(value);
+    void setAppTheme(value);
     try { await setSetting('theme', value); } catch {}
   };
 
@@ -337,18 +340,3 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     </div>
   );
 };
-
-function applyTheme(theme: ThemeMode) {
-  const root = document.documentElement;
-  if (theme === 'dark') {
-    root.classList.add('dark');
-  } else if (theme === 'light') {
-    root.classList.remove('dark');
-  } else {
-    root.classList.toggle('dark', window.matchMedia('(prefers-color-scheme: dark)').matches);
-  }
-}
-
-function isThemeMode(value: unknown): value is ThemeMode {
-  return value === 'light' || value === 'dark' || value === 'system';
-}

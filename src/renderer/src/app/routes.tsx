@@ -6,23 +6,32 @@ import {
   CircleDashed,
   Code2,
   Download,
-  FileEdit,
   FilePlus2,
   FileVideo,
   Info,
   Menu,
   PanelLeftClose,
+  Maximize2,
+  Minimize2,
+  Minus,
   Settings,
   Sparkles,
   Trash2,
   Undo2,
+  X,
 } from 'lucide-react';
 import { SettingsModal } from './components/SettingsModal';
 import {
   onSceneReceived,
+  closeWindow,
+  dragWindow,
+  isWindowMaximized,
+  minimizeWindow,
+  onWindowResized,
   openFileDialog,
   readFile,
   saveFileDialog,
+  toggleMaximizeWindow,
   writeFile,
 } from '../ipc/tauri-api';
 import { type CompilerStore, useCompilerStore } from '../store/compiler-store';
@@ -33,6 +42,7 @@ import { normalizeAnimationSpec, summarizeSpec } from '../engine/animation-spec'
 import { inferDuration } from '../engine/engine-bridge';
 
 type JsonDropHandler = (json: object, name: string) => void;
+type JsonDropErrorHandler = (message: string) => void;
 
 const jsonFilters = [{ name: 'JSON 文件', extensions: ['json'] }];
 
@@ -51,14 +61,30 @@ function fileName(path: string | null) {
   return path.split(/[\\/]/).pop() || path;
 }
 
-function createJsonDropHandler(callback: JsonDropHandler) {
+function createJsonDropHandler(callback: JsonDropHandler, onError?: JsonDropErrorHandler) {
   return async (event: React.DragEvent<HTMLElement>) => {
     event.preventDefault();
-    const file = Array.from(event.dataTransfer.files).find((item) => item.name.toLowerCase().endsWith('.json'));
-    if (!file) return;
-    const text = await file.text();
-    callback(JSON.parse(text) as object, file.name);
+    event.stopPropagation();
+
+    try {
+      const file = Array.from(event.dataTransfer.files).find((item) => item.name.toLowerCase().endsWith('.json'));
+      if (!file) {
+        onError?.('请拖入 JSON 文件。');
+        return;
+      }
+
+      const text = await file.text();
+      callback(JSON.parse(text) as object, file.name);
+    } catch (error) {
+      onError?.(error instanceof Error ? error.message : '读取拖入文件失败。');
+    }
   };
+}
+
+function handleFileDrag(event: React.DragEvent<HTMLElement>) {
+  event.preventDefault();
+  event.stopPropagation();
+  event.dataTransfer.dropEffect = 'copy';
 }
 
 function downloadLottie(store: CompilerStore) {
@@ -74,6 +100,25 @@ function downloadLottie(store: CompilerStore) {
       const a = document.createElement('a');
       a.href = url;
       a.download = 'lottie.json';
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+  };
+}
+
+function downloadSpec(store: CompilerStore) {
+  return async () => {
+    if (!store.specJson) return;
+    const json = JSON.stringify(store.specJson, null, 2);
+    try {
+      const filePath = await saveFileDialog('animation-spec.json', jsonFilters);
+      if (filePath) await writeFile(filePath, json);
+    } catch {
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'animation-spec.json';
       a.click();
       URL.revokeObjectURL(url);
     }
@@ -117,8 +162,11 @@ const CompilerPage = () => {
     setAiInput('');
   };
 
-  const handleSceneDrop = createJsonDropHandler((json, name) => store.setSceneJson(json, name));
-  const handleSpecDrop = createJsonDropHandler((json, name) => store.setSpecJson(normalizeAnimationSpec(json, store.sceneJson), name));
+  const handleSceneDrop = createJsonDropHandler((json, name) => store.setSceneJson(json, name), store.setCompileError);
+  const handleSpecDrop = createJsonDropHandler(
+    (json, name) => store.setSpecJson(normalizeAnimationSpec(json, store.sceneJson), name),
+    store.setCompileError
+  );
   const canGenerate = Boolean(store.sceneJson && store.specJson && !store.isCompiling);
 
   return (
@@ -140,7 +188,6 @@ const CompilerPage = () => {
           <div className="bg-white dark:bg-neutral-900 rounded-2xl p-5 shadow-sm border border-neutral-100 dark:border-neutral-800 flex-1 flex flex-col min-h-0">
             <div className="flex items-center justify-between mb-4 shrink-0">
               <div className="flex items-center gap-2 text-neutral-900 dark:text-white font-medium">
-                <FileEdit className="w-4 h-4 text-blue-500" />
                 <span>输入</span>
               </div>
               <button
@@ -168,14 +215,24 @@ const CompilerPage = () => {
                 onSelect={handleSelectSpecJson}
                 onDrop={handleSpecDrop}
                 extra={
-                  <button
+                  <>
+                    <button
+                      onClick={downloadSpec(store)}
+                      disabled={!store.specJson}
+                      className="p-1 rounded-md text-neutral-400 hover:text-blue-500 disabled:opacity-30 disabled:hover:text-neutral-400"
+                      title="下载 animation-spec.json"
+                    >
+                      <Download className="w-4 h-4" />
+                    </button>
+                    <button
                     onClick={store.undoSingleSpec}
                     disabled={store.specHistory.length === 0}
                     className="p-1 rounded-md text-neutral-400 hover:text-blue-500 disabled:opacity-30 disabled:hover:text-neutral-400"
                     title="恢复上一版生成的 spec"
                   >
                     <Undo2 className="w-4 h-4" />
-                  </button>
+                    </button>
+                  </>
                 }
               />
             </div>
@@ -196,7 +253,7 @@ const CompilerPage = () => {
                   store.chatMessages.map((message) => (
                     <div
                       key={message.id}
-                      className={`text-sm rounded-lg px-3 py-2 max-w-[85%] ${
+                      className={`w-fit min-w-0 max-w-[85%] break-words text-sm rounded-lg px-3 py-2 ${
                         message.role === 'user'
                           ? 'ml-auto bg-blue-500 text-white'
                           : 'bg-white dark:bg-neutral-900 text-neutral-700 dark:text-neutral-200 border border-neutral-100 dark:border-neutral-700'
@@ -267,7 +324,6 @@ const StyleCodePage = () => {
         <div className="bg-white dark:bg-neutral-900 rounded-2xl p-5 shadow-sm border border-neutral-100 dark:border-neutral-800 flex flex-col min-h-0 gap-4">
           <div className="flex items-center justify-between mb-4 shrink-0">
             <div className="flex items-center gap-2 text-neutral-900 dark:text-white font-medium">
-              <FileEdit className="w-4 h-4 text-blue-500" />
               <span>输入</span>
             </div>
             <button
@@ -399,7 +455,8 @@ const FilePickerCard = ({
   extra?: React.ReactNode;
 }) => (
   <div
-    onDragOver={(event) => event.preventDefault()}
+    onDragEnter={handleFileDrag}
+    onDragOver={handleFileDrag}
     onDrop={onDrop}
     className={`border border-dashed rounded-xl p-4 flex items-center justify-between gap-4 ${
       active
@@ -459,7 +516,6 @@ const PreviewCard = () => {
     <div className="bg-white dark:bg-neutral-900 rounded-2xl p-5 shadow-sm border border-neutral-100 dark:border-neutral-800 flex flex-col min-h-0">
       <div className="flex items-center justify-between mb-4 shrink-0">
         <div className="flex items-center gap-2 text-neutral-900 dark:text-white font-medium">
-          <Sparkles className="w-4 h-4 text-blue-500" />
           <span>预览</span>
         </div>
         <div className="flex items-center gap-1.5 bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 px-2.5 py-1 rounded-full text-xs font-medium">
@@ -499,6 +555,73 @@ const SidebarItem = ({ icon: Icon, label, path }: { icon: React.ElementType; lab
   );
 };
 
+const WindowTitleBar = () => {
+  const [maximized, setMaximized] = useState(false);
+
+  const refreshMaximized = async () => {
+    try {
+      setMaximized(await isWindowMaximized());
+    } catch {}
+  };
+
+  const handleToggleMaximize = async () => {
+    await toggleMaximizeWindow();
+    window.setTimeout(() => void refreshMaximized(), 80);
+  };
+
+  useEffect(() => {
+    let dispose: (() => void) | undefined;
+    void refreshMaximized();
+    onWindowResized(() => {
+      void refreshMaximized();
+    }).then((unlisten) => {
+      dispose = unlisten;
+    });
+    return () => dispose?.();
+  }, []);
+
+  return (
+    <div
+    onMouseDown={(event) => {
+      if (event.detail === 2) {
+        void handleToggleMaximize();
+        return;
+      }
+      void dragWindow();
+    }}
+    className="h-9 shrink-0 bg-white/80 dark:bg-neutral-950/85 border-b border-neutral-200/70 dark:border-white/10 flex items-center justify-between select-none"
+  >
+    <div className="flex items-center gap-2 px-3 text-xs font-medium text-neutral-700 dark:text-neutral-200">
+      <div className="w-4 h-4 rounded bg-blue-500 text-white flex items-center justify-center text-[10px] font-bold">L</div>
+      <span>Lottie Compiler</span>
+    </div>
+    <div className="flex h-full" onMouseDown={(event) => event.stopPropagation()}>
+      <button
+        onClick={() => void minimizeWindow()}
+        className="w-11 h-full flex items-center justify-center text-neutral-600 dark:text-neutral-300 hover:bg-neutral-200/70 dark:hover:bg-white/10"
+        title="最小化"
+      >
+        <Minus className="w-4 h-4" />
+      </button>
+      <button
+        onClick={() => void handleToggleMaximize()}
+        className="w-11 h-full flex items-center justify-center text-neutral-600 dark:text-neutral-300 hover:bg-neutral-200/70 dark:hover:bg-white/10"
+        title="最大化"
+      >
+        {maximized ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+      </button>
+      <button
+        onClick={() => void closeWindow()}
+        className="w-11 h-full flex items-center justify-center text-neutral-600 dark:text-neutral-300 hover:bg-red-500 hover:text-white"
+        title="关闭"
+      >
+        <X className="w-4 h-4" />
+      </button>
+    </div>
+    </div>
+  );
+};
+
 const RootLayout = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -521,17 +644,14 @@ const RootLayout = () => {
   }, [navigate, setMode, setSceneJson]);
 
   return (
-    <div className="flex h-screen bg-[#E5E7EB] dark:bg-neutral-950 bg-[radial-gradient(ellipse_at_top_left,_var(--tw-gradient-stops))] from-white dark:from-neutral-900 to-[#E5E7EB] dark:to-neutral-950 font-sans overflow-hidden relative">
+    <div className="h-screen flex flex-col bg-[#E5E7EB] dark:bg-neutral-950 font-sans overflow-hidden">
+      <WindowTitleBar />
+      <div className="flex flex-1 min-h-0 bg-[#E5E7EB] dark:bg-neutral-950 bg-[radial-gradient(ellipse_at_top_left,_var(--tw-gradient-stops))] from-white dark:from-neutral-900 to-[#E5E7EB] dark:to-neutral-950 overflow-hidden relative">
       <aside
         className={`${isSidebarOpen ? 'w-64 translate-x-0' : 'w-0 -translate-x-full'} transition-all duration-300 ease-in-out bg-white/42 dark:bg-neutral-950/42 backdrop-blur-2xl supports-[backdrop-filter]:backdrop-saturate-150 flex flex-col pt-4 pb-6 shrink-0 border-r border-white/55 dark:border-white/10 absolute z-20 h-full md:relative overflow-hidden md:flex shadow-[1px_0_28px_rgba(15,23,42,0.08),inset_-1px_0_0_rgba(255,255,255,0.36)] dark:shadow-[1px_0_28px_rgba(0,0,0,0.28),inset_-1px_0_0_rgba(255,255,255,0.08)]`}
         style={{ minWidth: isSidebarOpen ? '16rem' : '0' }}
       >
-        <div className="px-4 mb-4 flex justify-between items-center w-64 shrink-0">
-          <div className="flex gap-1.5">
-            <div className="w-3 h-3 rounded-full bg-red-400" />
-            <div className="w-3 h-3 rounded-full bg-yellow-400" />
-            <div className="w-3 h-3 rounded-full bg-green-400" />
-          </div>
+        <div className="px-4 mb-4 flex justify-end items-center w-64 shrink-0">
           <button onClick={() => setIsSidebarOpen(false)} className="text-neutral-400 dark:text-neutral-500 hover:text-neutral-600 dark:hover:text-neutral-300 p-1 rounded-md">
             <PanelLeftClose className="w-4 h-4" />
           </button>
@@ -572,6 +692,7 @@ const RootLayout = () => {
       {isSidebarOpen && <div className="fixed inset-0 bg-black/20 dark:bg-black/40 z-10 md:hidden" onClick={() => setIsSidebarOpen(false)} />}
 
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+      </div>
     </div>
   );
 };

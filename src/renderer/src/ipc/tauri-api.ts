@@ -2,6 +2,7 @@
 // Tauri-based API wrapper — replaces Electron's window.electronAPI
 
 import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWindow, type Theme } from '@tauri-apps/api/window';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
 import { listen } from '@tauri-apps/api/event';
@@ -68,6 +69,34 @@ export async function getSetting(key: string): Promise<string> {
 
 export async function setSetting(key: string, value: string): Promise<void> {
   await invoke('set_setting', { key, value });
+}
+
+export async function setWindowTheme(theme: Theme | null): Promise<void> {
+  await getCurrentWindow().setTheme(theme);
+}
+
+export async function dragWindow(): Promise<void> {
+  await getCurrentWindow().startDragging();
+}
+
+export async function minimizeWindow(): Promise<void> {
+  await getCurrentWindow().minimize();
+}
+
+export async function toggleMaximizeWindow(): Promise<void> {
+  await getCurrentWindow().toggleMaximize();
+}
+
+export async function isWindowMaximized(): Promise<boolean> {
+  return getCurrentWindow().isMaximized();
+}
+
+export async function onWindowResized(callback: () => void): Promise<() => void> {
+  return getCurrentWindow().onResized(callback);
+}
+
+export async function closeWindow(): Promise<void> {
+  await getCurrentWindow().close();
 }
 
 // ── AI Fetch ──

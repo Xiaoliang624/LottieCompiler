@@ -397,7 +397,7 @@ function buildAnimatedProperty(keyframes, transform, tangentTransform) {
       if (index === normalizedKeyframes.length - 1) {
         return {
           t: frame.frame,
-          s: current
+          s: animatedKeyframeValue(current)
         };
       }
 
@@ -405,8 +405,8 @@ function buildAnimatedProperty(keyframes, transform, tangentTransform) {
 
       const keyframe = {
         t: frame.frame,
-        s: current,
-        e: transform(normalizedKeyframes[index + 1].value),
+        s: animatedKeyframeValue(current),
+        e: animatedKeyframeValue(transform(normalizedKeyframes[index + 1].value)),
         i: easing.i,
         o: easing.o
       };
@@ -423,6 +423,10 @@ function buildAnimatedProperty(keyframes, transform, tangentTransform) {
       return keyframe;
     })
   };
+}
+
+function animatedKeyframeValue(value) {
+  return Array.isArray(value) ? value : [value];
 }
 
 function normalizeSpatialTangent(value) {

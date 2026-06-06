@@ -3,6 +3,7 @@ import { RouterProvider } from "react-router";
 import { router } from "./routes";
 import { getSetting } from "../ipc/tauri-api";
 import { useCompilerStore } from "../store/compiler-store";
+import { isThemeMode, setAppTheme } from "./theme";
 
 export default function App() {
   const setApiConfig = useCompilerStore((state) => state.setApiConfig);
@@ -23,9 +24,9 @@ export default function App() {
           ...(modelName ? { modelName } : {}),
         });
 
-        applyTheme(isThemeMode(theme) ? theme : "light");
+        void setAppTheme(isThemeMode(theme) ? theme : "light");
       } catch {
-        applyTheme("light");
+        void setAppTheme("light");
       }
     }
 
@@ -33,21 +34,4 @@ export default function App() {
   }, [setApiConfig]);
 
   return <RouterProvider router={router} />;
-}
-
-type ThemeMode = "light" | "dark" | "system";
-
-function applyTheme(theme: ThemeMode) {
-  const root = document.documentElement;
-  if (theme === "dark") {
-    root.classList.add("dark");
-  } else if (theme === "light") {
-    root.classList.remove("dark");
-  } else {
-    root.classList.toggle("dark", window.matchMedia("(prefers-color-scheme: dark)").matches);
-  }
-}
-
-function isThemeMode(value: unknown): value is ThemeMode {
-  return value === "light" || value === "dark" || value === "system";
 }

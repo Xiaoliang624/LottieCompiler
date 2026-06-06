@@ -200,6 +200,7 @@ export function summarizeLottie(output: unknown): Array<{ title: string; value: 
   const op = numberValue(lottie.op);
   const layers = Array.isArray(lottie.layers) ? lottie.layers.length : 0;
   const duration = fps && op ? (op - ip) / fps : null;
+  const sizeKb = lottieSizeKb(output);
 
   return [
     { title: '尺寸', value: width && height ? `${width} x ${height}` : '-' },
@@ -207,8 +208,18 @@ export function summarizeLottie(output: unknown): Array<{ title: string; value: 
     { title: '帧数', value: op ? formatNumber(op - ip) : '-' },
     { title: '时长', value: duration ? `${formatNumber(duration)}s` : '-' },
     { title: '图层', value: String(layers) },
-    { title: '版本', value: valueAsString(lottie.v) || '-' },
+    { title: '体积', value: sizeKb === null ? '-' : `${formatNumber(sizeKb)} KB` },
   ];
+}
+
+function lottieSizeKb(output: unknown): number | null {
+  try {
+    const json = JSON.stringify(output);
+    if (!json) return null;
+    return new Blob([json]).size / 1024;
+  } catch {
+    return null;
+  }
 }
 
 export function scenePromptContext(scene: unknown, focusText = '', limit = 90): string {
@@ -727,11 +738,23 @@ function hasAnimatedProperty(value: unknown, seen: Set<unknown>): boolean {
 
   if (!Array.isArray(value)) {
     const object = value as JsonObject;
-    if (object.a === 1 && Array.isArray(object.k) && object.k.length > 1) return true;
+    if (object.a === 1 && Array.isArray(object.k) && animatedKeyframesDiffer(object.k)) return true;
   }
 
   const values = Array.isArray(value) ? value : Object.values(value as JsonObject);
   return values.some((item) => hasAnimatedProperty(item, seen));
+}
+
+function animatedKeyframesDiffer(keyframes: unknown[]): boolean {
+  const frames = keyframes.map(asObject);
+  if (frames.some((frame) => frame.e !== undefined && !jsonValuesEqual(frame.s, frame.e))) return true;
+
+  const values = frames.map((frame) => frame.s).filter((value) => value !== undefined);
+  return values.length > 1 && values.slice(1).some((value) => !jsonValuesEqual(value, values[0]));
+}
+
+function jsonValuesEqual(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 function copyPointAlias(output: JsonObject, input: JsonObject, outputKey: string, aliases: string[]) {
