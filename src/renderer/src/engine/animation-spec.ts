@@ -1,9 +1,42 @@
 type JsonObject = Record<string, unknown>;
 
+type ScenePromptNode = {
+  id: string;
+  name: string;
+  type: string;
+  sourceType: string;
+  parent: string;
+  depth: number;
+  childCount: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  centerX: number;
+  centerY: number;
+  opacity: number;
+  rotation: number;
+  hasFill: boolean;
+  hasStroke: boolean;
+  hasFillGeometry: boolean;
+  hasStrokeGeometry: boolean;
+  hasImageAsset: boolean;
+  isMask: boolean;
+  isRootFrame: boolean;
+};
+
+type SceneTarget = {
+  raw: string;
+  canonical: string;
+  targetable: boolean;
+  fallbackTarget?: string;
+};
+
 const PROPERTY_ALIASES: Record<string, string> = {
   position: 'position',
   pos: 'position',
   translate: 'position',
+  transformposition: 'position',
   p: 'position',
   positionx: 'positionX',
   x: 'positionX',
@@ -23,8 +56,10 @@ const PROPERTY_ALIASES: Record<string, string> = {
   s: 'scale',
   scalex: 'scaleX',
   sx: 'scaleX',
+  widthscale: 'scaleX',
   scaley: 'scaleY',
   sy: 'scaleY',
+  heightscale: 'scaleY',
   rotation: 'rotation',
   rotate: 'rotation',
   angle: 'rotation',
@@ -35,6 +70,8 @@ const PROPERTY_ALIASES: Record<string, string> = {
   o: 'opacity',
   anchor: 'anchorPoint',
   anchorpoint: 'anchorPoint',
+  anchorposition: 'anchorPoint',
+  transformanchor: 'anchorPoint',
   a: 'anchorPoint',
   anchorx: 'anchorX',
   ax: 'anchorX',
@@ -76,8 +113,23 @@ const PROPERTY_ALIASES: Record<string, string> = {
   trimpathoffset: 'trimOffset',
 };
 
-const ALLOWED_PROPERTIES = new Set(Object.values(PROPERTY_ALIASES));
 const SPEC_KEYS = ['spec', 'animationSpec', 'animation_spec', 'animation-spec', 'animation-spec.json', 'json'];
+const ALLOWED_PROPERTIES = new Set(Object.values(PROPERTY_ALIASES));
+const TRANSFORM_PROPERTIES = new Set([
+  'position',
+  'positionX',
+  'positionY',
+  'scale',
+  'scaleX',
+  'scaleY',
+  'rotation',
+  'opacity',
+  'anchorPoint',
+  'anchorX',
+  'anchorY',
+  'skew',
+  'skewAxis',
+]);
 
 export function extractAnimationSpecFromText(text: string, scene?: unknown): JsonObject {
   const cleaned = text.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
@@ -103,13 +155,13 @@ export function normalizeAnimationSpec(input: unknown, scene?: unknown): JsonObj
       numberValue(asObject(root.meta).duration) ??
       numberValue(root.durationFrames) ??
       numberValue(root.duration) ??
-      60,
+      sceneDurationFrames(scene),
     1,
     600
   );
 
   const animations = rawAnimations
-    .map((animation) => normalizeAnimation(animation, durationFrames, sceneTargets))
+    .map((animation) => normalizeAnimation(animation, durationFrames, sceneTargets, scene))
     .filter((animation): animation is JsonObject => Boolean(animation));
 
   if (!animations.length) {
@@ -159,36 +211,86 @@ export function summarizeLottie(output: unknown): Array<{ title: string; value: 
   ];
 }
 
-export function scenePromptContext(scene: unknown, limit = 90): string {
-  const nodes = collectSceneNodes(scene).slice(0, limit);
+export function scenePromptContext(scene: unknown, focusText = '', limit = 90): string {
+  const allNodes = collectSceneNodes(scene);
+  const focusedNodes = focusedSceneNodes(allNodes, focusText);
+  const sourceNodes = focusedNodes.length ? focusedNodes : allNodes;
+  const nodes = sourceNodes.slice(0, limit);
   if (!nodes.length) return JSON.stringify(scene, null, 2).slice(0, 12000);
 
-  return nodes
-    .map((node) => {
-      const size = node.width || node.height ? ` ${formatNumber(node.width)}x${formatNumber(node.height)}` : '';
-      const pos = node.x || node.y ? ` @${formatNumber(node.x)},${formatNumber(node.y)}` : '';
-      return `- ${node.id}${node.name ? ` (${node.name})` : ''}${pos}${size}`;
-    })
-    .join('\n');
+  return JSON.stringify({
+    canvas: sceneCanvas(scene),
+    nodeCount: allNodes.length,
+    contextMode: focusedNodes.length ? 'focused-nodes' : 'first-nodes',
+    nodesIncluded: nodes.length,
+    truncated: sourceNodes.length > nodes.length,
+    targetRule: 'Use a targetable node id or exact node name. Do not target the root frame/canvas when targetable is false.',
+    nodes: nodes.map((node) => ({
+      id: node.id,
+      name: node.name,
+      type: node.type,
+      sourceType: node.sourceType,
+      parent: node.parent,
+      depth: node.depth,
+      childCount: node.childCount,
+      x: node.x,
+      y: node.y,
+      width: node.width,
+      height: node.height,
+      centerX: node.centerX,
+      centerY: node.centerY,
+      opacity: node.opacity,
+      rotation: node.rotation,
+      hasFill: node.hasFill,
+      hasStroke: node.hasStroke,
+      hasFillGeometry: node.hasFillGeometry,
+      hasStrokeGeometry: node.hasStrokeGeometry,
+      hasImageAsset: node.hasImageAsset,
+      isMask: node.isMask,
+      targetable: isTargetableSceneNode(node),
+    })),
+  });
 }
 
-type ScenePromptNode = {
-  id: string;
-  name: string;
-  parent: string;
-  depth: number;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-};
+export function hasPlayableAnimation(lottie: unknown): boolean {
+  return hasAnimatedProperty(lottie, new Set());
+}
 
-type SceneTarget = {
-  raw: string;
-  canonical: string;
-};
+export function createFallbackAnimationSpec(scene: unknown): JsonObject {
+  const target = firstTargetableSceneNode(scene);
+  const endFrame = Math.max(1, Math.round(sceneDurationFrames(scene)));
+  const fadeFrame = Math.max(1, Math.min(12, Math.round(endFrame / 3)));
+  const settleFrame = Math.max(1, Math.min(18, Math.round(endFrame / 2)));
 
-function normalizeAnimation(input: unknown, durationFrames: number, sceneTargets: SceneTarget[]): JsonObject | null {
+  return {
+    meta: {
+      name: '兜底动效',
+      durationFrames: endFrame,
+    },
+    animations: target ? [
+      {
+        target: target.id || target.name,
+        property: 'opacity',
+        keyframes: [
+          { frame: 0, value: 0, easing: 'ease-out' },
+          { frame: fadeFrame, value: 100, easing: 'ease-out' },
+          { frame: endFrame, value: 100, easing: 'linear' },
+        ],
+      },
+      {
+        target: target.id || target.name,
+        property: 'scale',
+        keyframes: [
+          { frame: 0, value: 92, easing: 'ease-out' },
+          { frame: settleFrame, value: 104, easing: 'ease-out' },
+          { frame: endFrame, value: 100, easing: 'ease-in-out' },
+        ],
+      },
+    ] : [],
+  };
+}
+
+function normalizeAnimation(input: unknown, durationFrames: number, sceneTargets: SceneTarget[], scene: unknown): JsonObject | null {
   const animation = asObject(input);
   const target = canonicalTarget(animation, sceneTargets);
   const property = normalizeProperty(valueAsString(animation.property ?? animation.type ?? animation.attribute ?? animation.prop));
@@ -202,6 +304,7 @@ function normalizeAnimation(input: unknown, durationFrames: number, sceneTargets
     .sort((a, b) => (numberValue(a.frame) ?? 0) - (numberValue(b.frame) ?? 0));
 
   keyframes = normalizeAnimationSpatialTangents(animation, keyframes, property);
+  keyframes = normalizePositionAnimationCoordinates(target, property, keyframes, scene);
   if (!keyframes.length) return null;
 
   return {
@@ -232,6 +335,60 @@ function normalizeKeyframe(input: unknown, property: string, durationFrames: num
   }
 
   return output;
+}
+
+function normalizePositionAnimationCoordinates(target: string, property: string, keyframes: JsonObject[], scene: unknown): JsonObject[] {
+  if (property !== 'position' && property !== 'positionX' && property !== 'positionY') return keyframes;
+  const reference = sceneNodeReference(scene, target);
+  if (!reference) return keyframes;
+
+  return keyframes.map((keyframe) => {
+    const output = { ...keyframe };
+    if (property === 'position') {
+      const point = normalizedPoint(output.value);
+      if (!point) return output;
+      const normalizedPointValue = normalizePositionPoint(point, reference);
+      output.value = normalizedPointValue;
+      normalizeAbsoluteSpatialControls(output, normalizedPointValue, reference);
+      return output;
+    }
+
+    const raw = numberValue(output.value);
+    if (raw === null) return output;
+    output.value = normalizePositionAxisValue(
+      raw,
+      property === 'positionX' ? reference.x : reference.y,
+      property === 'positionX' ? reference.centerX : reference.centerY
+    );
+    return output;
+  });
+}
+
+function normalizePositionPoint(point: number[], reference: ScenePromptNode): number[] {
+  return [
+    normalizePositionAxisValue(point[0], reference.x, reference.centerX),
+    normalizePositionAxisValue(point[1], reference.y, reference.centerY),
+  ];
+}
+
+function normalizePositionAxisValue(value: number, referenceValue: number, centerValue: number): number {
+  return Math.abs(value - referenceValue) < 0.01 ? centerValue : value;
+}
+
+function normalizeAbsoluteSpatialControls(keyframe: JsonObject, position: number[], reference: ScenePromptNode) {
+  const outControl = normalizedPoint(keyframe.outControl);
+  if (outControl) {
+    const control = normalizePositionPoint(outControl, reference);
+    keyframe.outTangent = [control[0] - position[0], control[1] - position[1]];
+    delete keyframe.outControl;
+  }
+
+  const inControl = normalizedPoint(keyframe.inControl);
+  if (inControl) {
+    const control = normalizePositionPoint(inControl, reference);
+    keyframe.inTangent = [control[0] - position[0], control[1] - position[1]];
+    delete keyframe.inControl;
+  }
 }
 
 function normalizeAnimationSpatialTangents(animation: JsonObject, keyframes: JsonObject[], property: string): JsonObject[] {
@@ -341,6 +498,9 @@ function normalizeEasing(easing: unknown): unknown {
     .toLowerCase()
     .replace(/[_\s]/g, '-');
   switch (raw) {
+    case 'default':
+    case '默认':
+      return { out: [0.25, 0.1], in: [0.25, 1] };
     case 'linear':
     case '线性':
       return { out: [0, 0], in: [1, 1] };
@@ -352,6 +512,11 @@ function normalizeEasing(easing: unknown): unknown {
     case 'ease-out':
     case '缓出':
       return { out: [0, 0], in: [0.58, 1] };
+    case 'smooth':
+    case 'easeinout':
+    case 'ease-in-out':
+    case '缓入缓出':
+      return { out: [0.42, 0], in: [0.58, 1] };
     default:
       return { out: [0.42, 0], in: [0.58, 1] };
   }
@@ -362,9 +527,7 @@ function unwrapSpecObject(input: unknown): unknown {
     const parsed = tryParseJson(input);
     return parsed === null ? input : unwrapSpecObject(parsed);
   }
-  if (Array.isArray(input)) {
-    return input;
-  }
+  if (Array.isArray(input)) return input;
   const object = asObject(input);
   if (Array.isArray(object.animations) || Array.isArray(object.layers) || Array.isArray(object.keyframes)) return object;
   for (const key of SPEC_KEYS) {
@@ -392,18 +555,183 @@ function canonicalTarget(animation: JsonObject, sceneTargets: SceneTarget[]): st
   if (!rawTarget) return null;
   if (!sceneTargets.length) return rawTarget;
   const exact = sceneTargets.find((item) => item.raw === rawTarget);
-  if (exact) return exact.canonical;
+  if (exact) return exact.targetable ? exact.canonical : exact.fallbackTarget ?? null;
   const lower = rawTarget.toLowerCase();
-  return sceneTargets.find((item) => item.raw.toLowerCase() === lower)?.canonical ?? null;
+  const insensitive = sceneTargets.find((item) => item.raw.toLowerCase() === lower);
+  if (insensitive) return insensitive.targetable ? insensitive.canonical : insensitive.fallbackTarget ?? null;
+  return null;
 }
 
 function collectSceneTargets(scene: unknown): SceneTarget[] {
-  return collectSceneNodes(scene).flatMap((node) => {
+  const nodes = collectSceneNodes(scene);
+  const firstTargetable = nodes.find(isTargetableSceneNode);
+  const fallbackTarget = firstTargetable?.id || firstTargetable?.name;
+  const targets = nodes.flatMap((node) => {
     const output: SceneTarget[] = [];
-    if (node.id) output.push({ raw: node.id, canonical: node.id });
-    if (node.name) output.push({ raw: node.name, canonical: node.name });
+    const targetable = isTargetableSceneNode(node);
+    const nodeFallbackTarget = targetable ? undefined : fallbackTarget;
+    if (node.id) output.push({ raw: node.id, canonical: node.id, targetable, fallbackTarget: nodeFallbackTarget });
+    if (node.name) output.push({ raw: node.name, canonical: node.name, targetable, fallbackTarget: nodeFallbackTarget });
     return output;
   });
+
+  return [
+    ...rootSceneAliases(scene).map((raw) => ({
+      raw,
+      canonical: raw,
+      targetable: false,
+      fallbackTarget,
+    })),
+    ...targets,
+  ];
+}
+
+function rootSceneAliases(scene: unknown): string[] {
+  const sceneObject = asObject(scene);
+  const root = asObject(sceneObject.root);
+  const aliases = [
+    valueAsString(root.id ?? root.nodeId),
+    valueAsString(root.name ?? root.label),
+  ].filter(Boolean);
+  return [...new Set(aliases)];
+}
+
+function sceneNodeReference(scene: unknown, target: string): ScenePromptNode | null {
+  const nodes = collectSceneNodes(scene);
+  const exact = nodes.find((node) => node.id === target || node.name === target);
+  if (exact) return exact;
+  const lower = target.toLowerCase();
+  return nodes.find((node) => node.id.toLowerCase() === lower || node.name.toLowerCase() === lower) ?? null;
+}
+
+function firstTargetableSceneNode(scene: unknown): ScenePromptNode | undefined {
+  return collectSceneNodes(scene).find(isTargetableSceneNode);
+}
+
+function isTargetableSceneNode(node: ScenePromptNode): boolean {
+  if (node.isMask) return false;
+  if (node.isRootFrame) return false;
+  if (node.hasImageAsset || node.hasFill || node.hasStroke || node.hasFillGeometry || node.hasStrokeGeometry) return true;
+  const type = `${node.type} ${node.sourceType}`.toLowerCase();
+  if (type.includes('text') || type.includes('image') || type.includes('vector') || type.includes('star') || type.includes('ellipse') || type.includes('rectangle') || type.includes('shape')) return true;
+  return node.childCount === 0 && Boolean(node.id || node.name);
+}
+
+function focusedSceneNodes(nodes: ScenePromptNode[], focusText: string): ScenePromptNode[] {
+  const keywords = focusText
+    .toLowerCase()
+    .split(/[^a-z0-9\u4e00-\u9fff:_-]+/i)
+    .map((item) => item.trim())
+    .filter((item) => item.length >= 2);
+  if (!keywords.length) return [];
+
+  const focusedNames = new Set<string>();
+  const included = new Set<string>();
+  for (const node of nodes) {
+    const haystack = [node.id, node.name, node.type, node.sourceType, node.parent].join(' ').toLowerCase();
+    if (keywords.some((keyword) => haystack.includes(keyword))) {
+      const key = sceneNodeKey(node);
+      if (key) included.add(key);
+      if (node.name) focusedNames.add(node.name.toLowerCase());
+      if (node.parent) focusedNames.add(node.parent.toLowerCase());
+    }
+  }
+
+  if (!included.size) return [];
+  for (const node of nodes) {
+    const key = sceneNodeKey(node);
+    if (!key) continue;
+    if (focusedNames.has(node.name.toLowerCase()) || focusedNames.has(node.parent.toLowerCase())) included.add(key);
+  }
+  return nodes.filter((node) => {
+    const key = sceneNodeKey(node);
+    return key ? included.has(key) : false;
+  });
+}
+
+function sceneNodeKey(node: ScenePromptNode): string {
+  return node.id || node.name;
+}
+
+function sceneCanvas(scene: unknown): { width: number; height: number } {
+  const object = asObject(scene);
+  const root = asObject(object.root);
+  return {
+    width: numberValue(object.width ?? object.w ?? root.width) ?? 0,
+    height: numberValue(object.height ?? object.h ?? root.height) ?? 0,
+  };
+}
+
+function sceneDurationFrames(scene: unknown): number {
+  const object = asObject(scene);
+  const meta = asObject(object.meta);
+  return clampNumber(
+    numberValue(meta.durationFrames) ?? numberValue(object.durationFrames) ?? 60,
+    1,
+    600
+  );
+}
+
+function collectSceneNodes(scene: unknown, depth = 0, parent = '', forceRootFrame = false): ScenePromptNode[] {
+  const node = asObject(scene);
+  const root = asObject(node.root);
+  if (root && Object.keys(root).length) return collectSceneNodes(root, depth, parent, true);
+
+  const children = Array.isArray(node.children) ? node.children : [];
+  if (valueAsString(node.role) === 'root') {
+    return children.flatMap((child) => collectSceneNodes(child, depth, '', false));
+  }
+
+  const id = valueAsString(node.id ?? node.nodeId ?? node.name);
+  const name = valueAsString(node.name ?? node.label);
+  const x = numberValue(node.x) ?? 0;
+  const y = numberValue(node.y) ?? 0;
+  const width = numberValue(node.width) ?? 0;
+  const height = numberValue(node.height) ?? 0;
+  const currentName = name || id || parent;
+  const current = id || name ? [{
+    id: id || name,
+    name,
+    type: valueAsString(node.type ?? node.figmaType ?? node.sourceType),
+    sourceType: valueAsString(node.sourceType ?? node.figmaType),
+    parent,
+    depth,
+    childCount: children.length,
+    x,
+    y,
+    width,
+    height,
+    centerX: x + width / 2,
+    centerY: y + height / 2,
+    opacity: numberValue(node.opacity) ?? 100,
+    rotation: numberValue(node.rotation) ?? 0,
+    hasFill: nonEmptyArray(node.fills),
+    hasStroke: nonEmptyArray(node.strokes),
+    hasFillGeometry: nonEmptyArray(node.fillGeometry),
+    hasStrokeGeometry: nonEmptyArray(node.strokeGeometry),
+    hasImageAsset: Boolean(asObject(node.imageAsset).id || asObject(node.imageAsset).p),
+    isMask: Boolean(node.isMask),
+    isRootFrame: forceRootFrame || (depth === 0 && children.length > 0),
+  }] : [];
+
+  return [
+    ...current,
+    ...children.flatMap((child) => collectSceneNodes(child, depth + 1, currentName, false)),
+  ];
+}
+
+function hasAnimatedProperty(value: unknown, seen: Set<unknown>): boolean {
+  if (!value || typeof value !== 'object') return false;
+  if (seen.has(value)) return false;
+  seen.add(value);
+
+  if (!Array.isArray(value)) {
+    const object = value as JsonObject;
+    if (object.a === 1 && Array.isArray(object.k) && object.k.length > 1) return true;
+  }
+
+  const values = Array.isArray(value) ? value : Object.values(value as JsonObject);
+  return values.some((item) => hasAnimatedProperty(item, seen));
 }
 
 function copyPointAlias(output: JsonObject, input: JsonObject, outputKey: string, aliases: string[]) {
@@ -457,33 +785,6 @@ function extractJsonObjectCandidates(text: string): string[] {
   return candidates;
 }
 
-function collectSceneNodes(scene: unknown, depth = 0, parent?: string): ScenePromptNode[] {
-  const node = asObject(scene);
-  const root = asObject(node.root);
-  if (root && Object.keys(root).length) return collectSceneNodes(root, depth, parent);
-
-  const children = Array.isArray(node.children) ? node.children : [];
-  const id = valueAsString(node.id ?? node.nodeId ?? node.name);
-  const name = valueAsString(node.name ?? node.label);
-  const current = id || name
-    ? [{
-        id: id || name,
-        name,
-        parent: parent ?? '',
-        depth,
-        x: numberValue(node.x) ?? 0,
-        y: numberValue(node.y) ?? 0,
-        width: numberValue(node.width) ?? 0,
-        height: numberValue(node.height) ?? 0,
-      }]
-    : [];
-
-  return [
-    ...current,
-    ...children.flatMap((child) => collectSceneNodes(child, depth + 1, name || id || parent)),
-  ];
-}
-
 function firstArray(...values: unknown[]): unknown[] {
   return values.find(Array.isArray) as unknown[] ?? [];
 }
@@ -511,6 +812,10 @@ function clampNumber(value: number, min: number, max: number): number {
 
 function normalizedColorChannel(value: number): number {
   return value > 1 ? clampNumber(value / 255, 0, 1) : clampNumber(value, 0, 1);
+}
+
+function nonEmptyArray(value: unknown): boolean {
+  return Array.isArray(value) && value.length > 0;
 }
 
 function formatNumber(value: number): string {

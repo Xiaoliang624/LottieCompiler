@@ -3,28 +3,47 @@ import { useCompilerStore } from '../store/compiler-store';
 import { fetchAI } from '../ipc/tauri-api';
 import { normalizeAIEndpoint, type AIEndpointKind } from '../engine/ai-endpoint';
 import {
+  createFallbackAnimationSpec,
   extractAnimationSpecFromText,
+  hasPlayableAnimation,
   scenePromptContext,
   summarizeSpec,
 } from '../engine/animation-spec';
 import { compileLottieJson } from '../engine/engine-bridge';
 
-const SYSTEM_PROMPT = `You are an animation specification assistant.
-Return ONLY valid animation-spec.json. Do not wrap it in markdown.
+const SYSTEM_PROMPT = `OUTPUT CONTRACT
+You are a JSON generator, not a chat assistant.
+Your entire response must be one valid animation-spec.json object.
+The first character of your response must be { and the last character must be }.
+Do not wrap the JSON in Markdown or code fences.
+Do not write explanations, apologies, greetings, notes, analysis, comments, HTML, XML, YAML, CSS, JavaScript, or raw Lottie JSON.
+If you cannot satisfy the user request exactly, still return a valid animation-spec.json that approximates the request by animating existing scene nodes.
 
-Shape:
+REQUIRED JSON SHAPE
 {
+  "meta": { "durationFrames": 60, "name": "optional short name" },
   "animations": [
     {
-      "target": "nodeId",
-      "property": "position|scale|rotation|opacity|anchorPoint|skew|fillColor|strokeColor|strokeWidth|trimStart|trimEnd|trimOffset",
+      "target": "node id or exact node name from scene.json",
+      "property": "opacity",
       "keyframes": [
-        { "frame": 0, "value": [0, 0] },
-        { "frame": 60, "value": [120, 0], "easing": "easeInOut" }
+        { "frame": 0, "value": 0, "easing": "ease-out" },
+        { "frame": 18, "value": 100, "easing": "ease-out" }
       ]
     }
   ]
-}`;
+}
+
+VALIDATION RULES
+1. The root object must contain "meta" and "animations".
+2. Use only node ids or exact node names present in the supplied scene context.
+3. Prefer nodes where targetable is true. Do not target the root frame/canvas when targetable is false.
+4. Supported properties are: "position", "positionX", "positionY", "scale", "scaleX", "scaleY", "rotation", "opacity", "anchorPoint", "anchorX", "anchorY", "skew", "skewAxis", "fillColor", "fillOpacity", "strokeColor", "strokeOpacity", "strokeWidth", "trimStart", "trimEnd", "trimOffset".
+5. Use numeric frame fields. frame must be between 0 and meta.durationFrames.
+6. opacity values are 0-100. scale values are percentages, usually 80-130. rotation is degrees.
+7. Use at least two keyframes with different values for every animation.
+8. Values may be numbers, [x,y] points, [r,g,b] or [r,g,b,a] colors using 0-1 color channels.
+9. For a simple scene, animate the visible child layer rather than the canvas/frame container.`;
 
 type ChatResponse = {
   choices?: { message?: { content?: string } }[];
@@ -59,21 +78,24 @@ export function useAiChat() {
       if (!apiKey.trim()) throw new Error('请先配置 API Key。');
 
       const messages = [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'system', content: `Scene targets:\n${scenePromptContext(sceneJson)}` },
-        ...(specJson ? [{ role: 'system', content: `Current animation-spec.json:\n${JSON.stringify(specJson, null, 2).slice(0, 14000)}` }] : []),
-        ...chatMessages.slice(-8).map((m) => ({ role: m.role, content: m.content.slice(0, 1200) })),
-        { role: 'user', content: prompt },
+        ...chatMessages.slice(-8).map((message) => ({ role: message.role, content: message.content.slice(0, 1200) })),
+        {
+          role: 'user',
+          content: aiUserPrompt(prompt, sceneJson, specJson, chatMessages.slice(-8)),
+        },
       ];
 
       const endpoint = normalizeAIEndpoint(apiBaseUrl);
       const model = modelName.trim() || 'gpt-4.1-mini';
       const content = await requestAIWithFallback(endpoint, apiKey.trim(), model, messages, true);
-      const spec = await parseAndPreflightSpec(content, sceneJson, endpoint, apiKey.trim(), model, messages, true, 0);
+      const { spec, usedFallback } = await parseAndPreflightSpec(content, sceneJson, endpoint, apiKey.trim(), model, messages, true, 0);
       setSpecJson(spec);
-      addChatMessage({ role: 'assistant', content: `已生成 animation-spec.json（${summarizeSpec(spec)}）。` });
+      addChatMessage({
+        role: 'assistant',
+        content: `${usedFallback ? 'AI 返回的动画不可播放，已使用兜底动画。' : '已生成 animation-spec.json'}（${summarizeSpec(spec)}）`,
+      });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error || 'AI 请求失败。');
+      const message = errorMessage(error);
       addChatMessage({ role: 'assistant', content: `错误：${message}` });
       setCompileError(message);
     } finally {
@@ -95,6 +117,29 @@ export function useAiChat() {
   return { sendMessage };
 }
 
+function aiUserPrompt(
+  userPrompt: string,
+  sceneJson: object,
+  currentSpec: object | null,
+  contextMessages: Array<{ role: string; content: string }>
+): string {
+  return [
+    'Generate animation-spec.json only.',
+    '',
+    'Recent conversation context in this app session:',
+    contextMessages.map((message) => `${message.role}: ${message.content}`).join('\n') || '(none)',
+    '',
+    'Current animation-spec.json before this request:',
+    currentSpec ? JSON.stringify(currentSpec, null, 2).slice(0, 14000) : '(none)',
+    '',
+    'User animation request:',
+    userPrompt,
+    '',
+    'Scene context:',
+    scenePromptContext(sceneJson, userPrompt),
+  ].join('\n');
+}
+
 function requestBody(
   kind: AIEndpointKind,
   model: string,
@@ -102,13 +147,10 @@ function requestBody(
   useJsonFormat: boolean
 ) {
   if (kind === 'responses') {
-    const [system, ...rest] = messages;
     return {
       model,
-      instructions: system?.content ?? SYSTEM_PROMPT,
-      input: rest
-        .map((message) => `${message.role.toUpperCase()}:\n${message.content}`)
-        .join('\n\n'),
+      instructions: SYSTEM_PROMPT,
+      input: messages.map((message) => `${message.role.toUpperCase()}:\n${message.content}`).join('\n\n'),
       temperature: 0.2,
       ...(useJsonFormat ? { text: { format: { type: 'json_object' } } } : {}),
     };
@@ -116,7 +158,10 @@ function requestBody(
 
   return {
     model,
-    messages,
+    messages: [
+      { role: 'system', content: SYSTEM_PROMPT },
+      ...messages,
+    ],
     temperature: 0.2,
     ...(useJsonFormat ? { response_format: { type: 'json_object' } } : {}),
   };
@@ -155,27 +200,36 @@ async function parseAndPreflightSpec(
   messages: Array<{ role: string; content: string }>,
   useJsonFormat: boolean,
   repairAttempt: number
-): Promise<object> {
+): Promise<{ spec: object; usedFallback: boolean }> {
   try {
     const spec = extractAnimationSpecFromText(content, sceneJson);
-    compileLottieJson(sceneJson, spec);
-    return spec;
+    const lottie = compileLottieJson(sceneJson, spec);
+    if (!hasPlayableAnimation(lottie)) {
+      throw new Error('生成结果没有可播放的关键帧，可能是 AI 选择了根画布或静态容器。');
+    }
+    return { spec, usedFallback: false };
   } catch (error) {
-    if (repairAttempt > 0) throw error;
-    const repairMessages = [
-      ...messages,
-      {
-        role: 'user',
-        content: [
-          'Previous attempt failed and must be repaired.',
-          `Failure reason: ${errorMessage(error)}`,
-          `Previous invalid or uncompilable content:\n${content.slice(0, 6000)}`,
-          'Return a corrected animation-spec.json only. Use only targets and properties that compile with the supplied scene context.',
-        ].join('\n\n'),
-      },
-    ];
-    const repaired = await requestAIWithFallback(endpoint, apiKey, model, repairMessages, useJsonFormat);
-    return parseAndPreflightSpec(repaired, sceneJson, endpoint, apiKey, model, messages, useJsonFormat, repairAttempt + 1);
+    if (repairAttempt === 0) {
+      const repairMessages = [
+        ...messages,
+        {
+          role: 'user',
+          content: [
+            'Previous attempt failed and must be repaired.',
+            `Failure reason: ${errorMessage(error)}`,
+            `Previous invalid, static, or uncompilable content:\n${content.slice(0, 6000)}`,
+            'Return a corrected animation-spec.json only. Use only targetable scene nodes and ensure the compiled Lottie contains animated keyframes.',
+          ].join('\n\n'),
+        },
+      ];
+      const repaired = await requestAIWithFallback(endpoint, apiKey, model, repairMessages, useJsonFormat);
+      return parseAndPreflightSpec(repaired, sceneJson, endpoint, apiKey, model, messages, useJsonFormat, repairAttempt + 1);
+    }
+
+    const fallbackSpec = createFallbackAnimationSpec(sceneJson);
+    const fallbackLottie = compileLottieJson(sceneJson, fallbackSpec);
+    if (!hasPlayableAnimation(fallbackLottie)) throw error;
+    return { spec: fallbackSpec, usedFallback: true };
   }
 }
 

@@ -105,7 +105,7 @@ const CompilerPage = () => {
     const filePath = await openFileDialog(jsonFilters);
     if (!filePath) return;
     try {
-      store.setSpecJson(normalizeAnimationSpec(await readJsonFile(filePath)), filePath);
+      store.setSpecJson(normalizeAnimationSpec(await readJsonFile(filePath), store.sceneJson), filePath);
     } catch (error) {
       store.setCompileError(error instanceof Error ? error.message : '加载 animation-spec.json 失败。');
     }
@@ -118,7 +118,7 @@ const CompilerPage = () => {
   };
 
   const handleSceneDrop = createJsonDropHandler((json, name) => store.setSceneJson(json, name));
-  const handleSpecDrop = createJsonDropHandler((json, name) => store.setSpecJson(normalizeAnimationSpec(json), name));
+  const handleSpecDrop = createJsonDropHandler((json, name) => store.setSpecJson(normalizeAnimationSpec(json, store.sceneJson), name));
   const canGenerate = Boolean(store.sceneJson && store.specJson && !store.isCompiling);
 
   return (

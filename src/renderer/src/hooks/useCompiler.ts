@@ -6,6 +6,7 @@ import {
   sampleBrowserAnimation,
 } from '../engine/engine-bridge';
 import { shouldPreferBrowserSampler } from '../engine/css-strategy';
+import { hasPlayableAnimation } from '../engine/animation-spec';
 
 export function useCompiler() {
   const {
@@ -35,6 +36,9 @@ export function useCompiler() {
             throw new Error('请先加载 scene.json 和 animation-spec.json。');
           }
           output = compileLottieJson(sceneJson, specJson);
+          if (!hasPlayableAnimation(output)) {
+            throw new Error('生成的 Lottie 没有可播放关键帧，请检查 animation-spec.json 是否选中了真实图层，而不是根画布。');
+          }
           break;
         }
 
