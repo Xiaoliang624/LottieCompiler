@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self' https://api.openai.com;"
+    />
+    <title>Lottie Compiler</title>
+    <meta name="description" content="Cross-platform Lottie animation compiler" />
+    <style>html, body { height: 100%; margin: 0; } #root { height: 100%; }</style>
+    <script>
+      // Disable browser right-click menu, but keep it for text inputs
+      document.addEventListener('contextmenu', (e) => {
+        const tag = e.target.tagName;
+        if (tag !== 'INPUT' && tag !== 'TEXTAREA') e.preventDefault();
+      });
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script src="/engine/compiler-core.js"></script>
+    <script src="/engine/css-to-lottie-core.js"></script>
+    <script src="/engine/browser-sampler-core.js"></script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
