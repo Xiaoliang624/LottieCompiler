@@ -1,0 +1,63 @@
+@import './fonts.css';
+@import './tailwind.css';
+@import './theme.css';
+
+html,
+body,
+#root {
+  min-height: 100%;
+  background: #e5e7eb;
+}
+
+.dark body,
+.dark #root {
+  background: #0a0a0a;
+}
+
+.app-window {
+  border-radius: 14px;
+  isolation: isolate;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+input,
+textarea,
+[contenteditable='true'] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.window-drag-strip {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 256px;
+  z-index: 20;
+  height: 48px;
+  pointer-events: auto;
+  -webkit-app-region: drag;
+}
+
+.page-content {
+  transition: padding-left 200ms ease;
+}
+
+.sidebar-collapsed > .page-content {
+  padding-left: 5rem;
+}
+
+button,
+input,
+textarea,
+select,
+a,
+[role='button'] {
+  -webkit-app-region: no-drag;
+}
+
+@media (display-mode: fullscreen) {
+  .app-window {
+    border-radius: 0;
+  }
+}
