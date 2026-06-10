@@ -713,6 +713,11 @@ function hasAnimValue(props, key) {
   return props && props[key] != null
 }
 
+function cloneData(value) {
+  if (typeof structuredClone === 'function') return structuredClone(value)
+  return JSON.parse(JSON.stringify(value))
+}
+
 function normalizeKeyframeStops(stops) {
   if (!stops.length) return stops
   const sorted = stops.slice().sort((a, b) => a.pct - b.pct)
@@ -726,14 +731,14 @@ function normalizeKeyframeStops(stops) {
       if (hasAnimValue(stop.props, key)) {
         last = stop.props[key]
       } else if (last != null) {
-        stop.props[key] = Array.isArray(last) ? [...last] : (typeof last === 'object' ? JSON.parse(JSON.stringify(last)) : last)
+        stop.props[key] = Array.isArray(last) ? [...last] : (typeof last === 'object' ? cloneData(last) : last)
       }
     }
     let next = null
     for (let i = sorted.length - 1; i >= 0; i--) {
       const stop = sorted[i]
       if (hasAnimValue(stop.props, key)) next = stop.props[key]
-      else if (next != null) stop.props[key] = Array.isArray(next) ? [...next] : (typeof next === 'object' ? JSON.parse(JSON.stringify(next)) : next)
+      else if (next != null) stop.props[key] = Array.isArray(next) ? [...next] : (typeof next === 'object' ? cloneData(next) : next)
     }
   }
 
@@ -1058,7 +1063,7 @@ function repeatKeyframedProperty(property, baseFrames, cycles) {
   for (let cycle = 0; cycle < cycles; cycle++) {
     for (const keyframe of original) {
       repeated.push({
-        ...JSON.parse(JSON.stringify(keyframe)),
+        ...cloneData(keyframe),
         t: keyframe.t + cycle * baseFrames,
       })
     }

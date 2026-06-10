@@ -3,6 +3,7 @@ import type { AnimationItem, BMEnterFrameEvent } from 'lottie-web';
 import { Pause, Play, RotateCcw } from 'lucide-react';
 import { useCompilerStore } from '../store/compiler-store';
 import { summarizeLottie } from '../engine/animation-spec';
+import { cloneJsonData } from '../engine/json-utils';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -16,7 +17,7 @@ function numberValue(value: unknown): number | null {
 }
 
 function createPreviewAnimationData(lottieOutput: object): object {
-  const output = JSON.parse(JSON.stringify(lottieOutput)) as JsonRecord;
+  const output = cloneJsonData(lottieOutput) as JsonRecord;
   const ip = numberValue(output.ip) ?? 0;
   const op = numberValue(output.op) ?? 0;
   if (op - ip > 1) {

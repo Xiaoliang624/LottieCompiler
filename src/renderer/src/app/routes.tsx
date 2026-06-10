@@ -2,11 +2,12 @@ import { createHashRouter, Outlet, useLocation, useNavigate } from 'react-router
 import { useEffect, useState } from 'react';
 import {
   ArrowUp,
+  Check,
   Circle,
   CircleDashed,
   Code2,
   Download,
-  FilePlus2,
+  FileJson2,
   FileVideo,
   Info,
   Menu,
@@ -28,9 +29,10 @@ import { type CompilerStore, useCompilerStore } from '../store/compiler-store';
 import { useCompiler } from '../hooks/useCompiler';
 import { useAiChat } from '../hooks/useAiChat';
 import { LottiePreview } from '../components/LottiePreview';
-import { normalizeAnimationSpec, summarizeSpec } from '../engine/animation-spec';
+import { normalizeAnimationSpec } from '../engine/animation-spec';
 import { inferDuration } from '../engine/engine-bridge';
 import { isLottieJson } from '../engine/lottie-editor';
+import starsIcon from '../assets/stars.svg?raw';
 
 type JsonDropHandler = (json: object, name: string) => void;
 type JsonDropErrorHandler = (message: string) => void;
@@ -97,25 +99,6 @@ function downloadLottie(store: CompilerStore) {
   };
 }
 
-function downloadSpec(store: CompilerStore) {
-  return async () => {
-    if (!store.specJson) return;
-    const json = JSON.stringify(store.specJson, null, 2);
-    try {
-      const filePath = await saveFileDialog('animation-spec.json', jsonFilters);
-      if (filePath) await writeFile(filePath, json);
-    } catch {
-      const blob = new Blob([json], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'animation-spec.json';
-      a.click();
-      URL.revokeObjectURL(url);
-    }
-  };
-}
-
 const CompilerPage = () => {
   const store = useCompilerStore();
   const { compile } = useCompiler();
@@ -168,8 +151,6 @@ const CompilerPage = () => {
 
   return (
     <div className="page-content h-full flex flex-col bg-transparent p-6 overflow-y-auto animate-in fade-in duration-300">
-      <h1 className="text-2xl font-bold mb-6 text-neutral-900 dark:text-white">Lottie Compiler</h1>
-
       <TopActionBar
         title="scene + spec"
         status={statusText(store.compileError, store.compileSuccess)}
@@ -180,7 +161,7 @@ const CompilerPage = () => {
         onGenerate={compile}
       />
 
-      <div className="grid grid-cols-2 gap-6 flex-1 min-h-0">
+      <div className="grid grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)] gap-6 flex-1 min-h-0">
         <div className="flex flex-col gap-6 min-h-0">
           <div className="bg-white dark:bg-neutral-900 rounded-2xl p-5 shadow-sm border border-neutral-100 dark:border-neutral-800 flex-1 flex flex-col min-h-0">
             <div className="flex items-center justify-between mb-4 shrink-0">
@@ -196,11 +177,12 @@ const CompilerPage = () => {
               </button>
             </div>
 
-            <div className="space-y-4 mb-6 shrink-0">
+            <div className="flex items-start gap-3 mb-6 shrink-0 overflow-hidden">
               <FilePickerCard
                 title="scene.json / lottie.json"
-                subtitle={store.lottieSourceFilePath ? fileName(store.lottieSourceFilePath) : (store.sceneFilePath ? fileName(store.sceneFilePath) : '选择或拖入 scene 或 Lottie 文件')}
+                subtitle="选择或拖入 scene 或 Lottie 文件"
                 active={Boolean(store.sceneJson || store.lottieSourceJson)}
+                tone="blue"
                 onSelect={handleSelectSceneJson}
                 onDrop={handleSceneDrop}
               />
@@ -208,20 +190,13 @@ const CompilerPage = () => {
               {!isLottieEditMode && (
                 <FilePickerCard
                   title="animation-spec.json"
-                  subtitle={store.specJson ? summarizeSpec(store.specJson) : '选择、拖入或生成 spec'}
+                  subtitle="选择、拖入或生成 spec"
                   active={Boolean(store.specJson)}
+                  tone="green"
                   onSelect={handleSelectSpecJson}
                   onDrop={handleSpecDrop}
                   extra={
                     <>
-                      <button
-                        onClick={downloadSpec(store)}
-                        disabled={!store.specJson}
-                        className="p-1 rounded-md text-neutral-400 hover:text-blue-500 disabled:opacity-30 disabled:hover:text-neutral-400"
-                        title="下载 animation-spec.json"
-                      >
-                        <Download className="w-4 h-4" />
-                      </button>
                       <button
                         onClick={store.undoSingleSpec}
                         disabled={store.specHistory.length === 0}
@@ -238,7 +213,7 @@ const CompilerPage = () => {
 
             <div className="flex items-center justify-between mb-3 px-1 shrink-0">
               <h4 className="text-sm font-bold text-neutral-800 dark:text-neutral-200">
-                {isLottieEditMode ? '用 AI 直接编辑 Lottie 本体' : '用 AI 生成 animation-spec.json'}
+                AI助手
               </h4>
               {store.isAiThinking && <span className="text-xs text-blue-500">思考中...</span>}
             </div>
@@ -247,7 +222,14 @@ const CompilerPage = () => {
               <div className="flex-1 overflow-y-auto p-4 space-y-3">
                 {store.chatMessages.length === 0 ? (
                   <div className="h-full flex flex-col items-center justify-center text-center">
-                    <Sparkles className="w-6 h-6 text-blue-400 dark:text-blue-500 mb-3" />
+                    <span
+                      aria-hidden="true"
+                      className="mb-3 block h-6 w-6 bg-blue-500"
+                      style={{
+                        mask: `url("data:image/svg+xml,${encodeURIComponent(starsIcon)}") center / contain no-repeat`,
+                        WebkitMask: `url("data:image/svg+xml,${encodeURIComponent(starsIcon)}") center / contain no-repeat`,
+                      }}
+                    />
                     <p className="text-sm text-neutral-500 dark:text-neutral-400">
                       {isLottieEditMode ? '描述要在当前 Lottie 本体上修改的动画。' : '描述你想生成的动效。'}
                     </p>
@@ -323,7 +305,7 @@ const StyleCodePage = () => {
         onGenerate={compile}
       />
 
-      <div className="grid grid-cols-2 gap-6 flex-1 min-h-0">
+      <div className="grid grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)] gap-6 flex-1 min-h-0">
         <div className="bg-white dark:bg-neutral-900 rounded-2xl p-5 shadow-sm border border-neutral-100 dark:border-neutral-800 flex flex-col min-h-0 gap-4">
           <div className="flex items-center justify-between mb-4 shrink-0">
             <div className="flex items-center gap-2 text-neutral-900 dark:text-white font-medium">
@@ -446,6 +428,7 @@ const FilePickerCard = ({
   title,
   subtitle,
   active,
+  tone,
   onSelect,
   onDrop,
   extra,
@@ -453,33 +436,59 @@ const FilePickerCard = ({
   title: string;
   subtitle: string;
   active: boolean;
+  tone?: 'blue' | 'green';
   onSelect: () => void;
   onDrop: (event: React.DragEvent<HTMLElement>) => void;
   extra?: React.ReactNode;
-}) => (
-  <div
-    onDragEnter={handleFileDrag}
-    onDragOver={handleFileDrag}
-    onDrop={onDrop}
-    className={`border border-dashed rounded-xl p-4 flex items-center justify-between gap-4 ${
-      active
-        ? 'border-blue-200 dark:border-blue-900/50 bg-blue-50/50 dark:bg-blue-900/10'
-        : 'border-neutral-200 dark:border-neutral-700 bg-neutral-50/60 dark:bg-neutral-800/30'
-    }`}
-  >
-    <div className="flex items-center gap-4 min-w-0">
-      <FilePlus2 className={`w-6 h-6 shrink-0 ${active ? 'text-blue-500' : 'text-neutral-400'}`} />
-      <div className="min-w-0">
-        <h4 className="font-medium text-sm text-neutral-900 dark:text-white">{title}</h4>
-        <p className="text-xs text-neutral-500 dark:text-neutral-400 truncate">{subtitle}</p>
+}) => {
+  const gradient = tone === 'green'
+    ? 'from-emerald-400 to-emerald-200'
+    : 'from-indigo-500 to-indigo-200';
+  const titleHoverColor = tone === 'green' ? 'group-hover:text-emerald-600' : 'group-hover:text-indigo-600';
+  const ringColor = tone === 'green' ? 'focus-visible:ring-emerald-500/40' : 'focus-visible:ring-indigo-500/40';
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onDragEnter={handleFileDrag}
+      onDragOver={handleFileDrag}
+      onDrop={onDrop}
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
+      className={`group min-w-0 flex-1 cursor-pointer flex items-start justify-between gap-2 rounded-lg px-1 py-1 focus:outline-none focus-visible:ring-2 ${ringColor}`}
+    >
+      <div className="min-w-0 flex-1 flex items-start gap-2 text-left">
+        <span className={`relative flex h-8 w-7 shrink-0 items-center justify-center rounded-md bg-gradient-to-br ${gradient} text-white shadow-sm`}>
+          <span className="absolute right-0 top-0 h-2 w-2 rounded-bl bg-white/50" />
+          <FileJson2 className="h-4 w-4" strokeWidth={2.2} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 items-start gap-1.5">
+            <span className={`min-w-0 whitespace-nowrap text-[12px] font-semibold leading-tight text-neutral-900 transition-colors dark:text-white ${titleHoverColor}`}>{title}</span>
+            {active && (
+              <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white">
+                <Check className="h-2 w-2" />
+              </span>
+            )}
+          </span>
+          <span className="mt-0.5 block text-[10px] font-normal leading-tight text-neutral-500 dark:text-neutral-400">{subtitle}</span>
+        </span>
+      </div>
+      <div
+        className="flex shrink-0 items-center gap-1 opacity-70 transition-opacity group-hover:opacity-100"
+        onClick={(event) => event.stopPropagation()}
+      >
+        {extra}
       </div>
     </div>
-    <div className="flex items-center gap-2 shrink-0">
-      {extra}
-      <button onClick={onSelect} className="text-sm text-blue-500 font-medium hover:text-blue-600">选择</button>
-    </div>
-  </div>
-);
+  );
+};
 
 const NumberInput = ({
   label,
@@ -624,23 +633,23 @@ const RootLayout = () => {
       <div className="flex flex-1 min-h-0 bg-[#E5E7EB] dark:bg-neutral-950 bg-[radial-gradient(ellipse_at_top_left,_var(--tw-gradient-stops))] from-white dark:from-neutral-900 to-[#E5E7EB] dark:to-neutral-950 overflow-hidden relative">
       <div className="window-drag-strip" data-tauri-drag-region="" />
       <aside
-        className={`${isSidebarOpen ? 'w-64 translate-x-0' : 'w-0 -translate-x-full'} transition-all duration-300 ease-in-out bg-white/42 dark:bg-neutral-950/42 backdrop-blur-2xl supports-[backdrop-filter]:backdrop-saturate-150 flex flex-col pt-0 pb-6 shrink-0 border-r border-white/55 dark:border-white/10 absolute z-30 h-full md:relative overflow-hidden md:flex shadow-[1px_0_28px_rgba(15,23,42,0.08),inset_-1px_0_0_rgba(255,255,255,0.36)] dark:shadow-[1px_0_28px_rgba(0,0,0,0.28),inset_-1px_0_0_rgba(255,255,255,0.08)]`}
-        style={{ minWidth: isSidebarOpen ? '16rem' : '0' }}
+        className={`${isSidebarOpen ? 'w-56 translate-x-0' : 'w-0 -translate-x-full'} transition-all duration-300 ease-in-out bg-white/42 dark:bg-neutral-950/42 backdrop-blur-2xl supports-[backdrop-filter]:backdrop-saturate-150 flex flex-col pt-0 pb-6 shrink-0 border-r border-white/55 dark:border-white/10 absolute z-30 h-full md:relative overflow-hidden md:flex shadow-[1px_0_28px_rgba(15,23,42,0.08),inset_-1px_0_0_rgba(255,255,255,0.36)] dark:shadow-[1px_0_28px_rgba(0,0,0,0.28),inset_-1px_0_0_rgba(255,255,255,0.08)]`}
+        style={{ minWidth: isSidebarOpen ? '14rem' : '0' }}
       >
-        <div className="px-4 mb-4 flex justify-end items-center w-64 h-12 shrink-0">
+        <div className="px-4 mb-4 flex justify-end items-center w-56 h-12 shrink-0">
           <button onClick={closeSidebarManually} className="text-neutral-400 dark:text-neutral-500 hover:text-neutral-600 dark:hover:text-neutral-300 p-1 rounded-md">
             <PanelLeftClose className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto w-64 flex flex-col min-h-0">
+        <div className="flex-1 overflow-y-auto w-56 flex flex-col min-h-0">
           <nav className="px-3 mb-8">
             <SidebarItem icon={FileVideo} label="动画规范" path="/" />
             <SidebarItem icon={Code2} label="样式代码" path="/style" />
           </nav>
         </div>
 
-        <div className="px-3 pt-4 w-64 shrink-0">
+        <div className="px-3 pt-4 w-56 shrink-0">
           <button
             onClick={() => setIsSettingsOpen(true)}
             className="w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white hover:bg-white/50 dark:hover:bg-neutral-800/50 hover:shadow-sm rounded-lg transition-all"

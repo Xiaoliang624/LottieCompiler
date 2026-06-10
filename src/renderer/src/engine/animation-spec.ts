@@ -1,3 +1,5 @@
+import { extractJsonObjectCandidates, tryParseJson } from './json-utils';
+
 type JsonObject = Record<string, unknown>;
 
 type ScenePromptNode = {
@@ -993,47 +995,6 @@ function copyPointAlias(output: JsonObject, input: JsonObject, outputKey: string
       return;
     }
   }
-}
-
-function tryParseJson(text: string): unknown | null {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
-
-function extractJsonObjectCandidates(text: string): string[] {
-  const starts: number[] = [];
-  for (let i = 0; i < text.length; i += 1) {
-    if (text[i] === '{') starts.push(i);
-  }
-
-  const candidates: string[] = [];
-  for (const start of starts) {
-    let depth = 0;
-    let inString = false;
-    let escape = false;
-    for (let i = start; i < text.length; i += 1) {
-      const ch = text[i];
-      if (escape) {
-        escape = false;
-      } else if (ch === '\\') {
-        escape = true;
-      } else if (ch === '"') {
-        inString = !inString;
-      } else if (!inString && ch === '{') {
-        depth += 1;
-      } else if (!inString && ch === '}') {
-        depth -= 1;
-        if (depth === 0) {
-          candidates.push(text.slice(start, i + 1));
-          break;
-        }
-      }
-    }
-  }
-  return candidates;
 }
 
 function firstArray(...values: unknown[]): unknown[] {

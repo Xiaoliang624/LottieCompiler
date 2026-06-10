@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::{self, Cursor};
+use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State, Emitter};
@@ -10,6 +10,7 @@ use tauri::{AppHandle, Manager, State, Emitter};
 struct AppState {
     figma_port: Mutex<u16>,
     settings: Mutex<Settings>,
+    http_client: reqwest::Client,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -112,12 +113,13 @@ fn get_figma_port(state: State<AppState>) -> u16 {
 
 #[tauri::command]
 async fn fetch_ai(
+    state: State<'_, AppState>,
     url: String,
     api_key: String,
     body: serde_json::Value,
     method: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let client = reqwest::Client::new();
+    let client = &state.http_client;
     let method = method.unwrap_or_else(|| "POST".to_string()).to_uppercase();
     let mut request = match method.as_str() {
         "GET" => client.get(&url),
@@ -185,6 +187,41 @@ fn describe_api_error(data: &serde_json::Value) -> String {
 
 // ── Figma Bridge HTTP Server ──
 
+fn header(name: &[u8], value: &[u8]) -> tiny_http::Header {
+    tiny_http::Header::from_bytes(name, value).unwrap()
+}
+
+fn cors_headers() -> Vec<tiny_http::Header> {
+    vec![
+        header(&b"Access-Control-Allow-Origin"[..], &b"*"[..]),
+        header(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS"[..]),
+        header(&b"Access-Control-Allow-Headers"[..], &b"Content-Type"[..]),
+    ]
+}
+
+fn json_response(status: u16, body: String) -> tiny_http::Response<Cursor<Vec<u8>>> {
+    let body_len = body.len();
+    let mut headers = cors_headers();
+    headers.push(header(&b"Content-Type"[..], &b"application/json"[..]));
+    tiny_http::Response::new(
+        tiny_http::StatusCode(status),
+        headers,
+        Cursor::new(body.into_bytes()),
+        Some(body_len),
+        None,
+    )
+}
+
+fn empty_response(status: u16) -> tiny_http::Response<Cursor<Vec<u8>>> {
+    tiny_http::Response::new(
+        tiny_http::StatusCode(status),
+        cors_headers(),
+        Cursor::new(Vec::new()),
+        Some(0),
+        None,
+    )
+}
+
 fn start_figma_bridge(app: AppHandle, preferred_port: u16) {
     std::thread::spawn(move || {
         let mut port = preferred_port;
@@ -211,60 +248,14 @@ fn start_figma_bridge(app: AppHandle, preferred_port: u16) {
             let url = request.url().to_string();
             let method = request.method().as_str().to_string();
 
-            let cors_header = tiny_http::Header::from_bytes(
-                &b"Access-Control-Allow-Origin"[..],
-                &b"*"[..],
-            )
-            .unwrap();
-            let cors_methods_header = tiny_http::Header::from_bytes(
-                &b"Access-Control-Allow-Methods"[..],
-                &b"GET, POST, OPTIONS"[..],
-            )
-            .unwrap();
-            let cors_headers_header = tiny_http::Header::from_bytes(
-                &b"Access-Control-Allow-Headers"[..],
-                &b"Content-Type"[..],
-            )
-            .unwrap();
-
             if method == "OPTIONS" {
-                let response = tiny_http::Response::new(
-                    tiny_http::StatusCode(204),
-                    vec![
-                        cors_header.clone(),
-                        cors_methods_header.clone(),
-                        cors_headers_header.clone(),
-                    ],
-                    io::empty(),
-                    None,
-                    None,
-                );
-                let _ = request.respond(response);
+                let _ = request.respond(empty_response(204));
                 continue;
             }
 
             if method == "GET" && url == "/health" {
                 let body = serde_json::json!({"status": "ok", "port": port}).to_string();
-                let mut headers = vec![
-                    cors_header.clone(),
-                    cors_methods_header.clone(),
-                    cors_headers_header.clone(),
-                ];
-                headers.push(
-                    tiny_http::Header::from_bytes(
-                        &b"Content-Type"[..],
-                        &b"application/json"[..],
-                    )
-                    .unwrap(),
-                );
-                let response = tiny_http::Response::new(
-                    tiny_http::StatusCode(200),
-                    headers,
-                    Cursor::new(body.as_bytes().to_vec()),
-                    Some(body.len()),
-                    None,
-                );
-                let _ = request.respond(response);
+                let _ = request.respond(json_response(200, body));
                 continue;
             }
 
@@ -274,62 +265,16 @@ fn start_figma_bridge(app: AppHandle, preferred_port: u16) {
                     if let Ok(scene) = serde_json::from_str::<serde_json::Value>(&body) {
                         let _ = app.emit("figma-bridge:scene-received", &scene);
                         let resp_body = serde_json::json!({"success": true}).to_string();
-                        let mut headers = vec![
-                            cors_header.clone(),
-                            cors_methods_header.clone(),
-                            cors_headers_header.clone(),
-                        ];
-                        headers.push(
-                            tiny_http::Header::from_bytes(
-                                &b"Content-Type"[..],
-                                &b"application/json"[..],
-                            )
-                            .unwrap(),
-                        );
-                        let response = tiny_http::Response::new(
-                            tiny_http::StatusCode(200),
-                            headers,
-                            Cursor::new(resp_body.as_bytes().to_vec()),
-                            Some(resp_body.len()),
-                            None,
-                        );
-                        let _ = request.respond(response);
+                        let _ = request.respond(json_response(200, resp_body));
                         continue;
                     }
                 }
                 let resp_body = serde_json::json!({"success": false, "error": "Invalid JSON"}).to_string();
-                let mut headers = vec![
-                    cors_header.clone(),
-                    cors_methods_header.clone(),
-                    cors_headers_header.clone(),
-                ];
-                headers.push(
-                    tiny_http::Header::from_bytes(
-                        &b"Content-Type"[..],
-                        &b"application/json"[..],
-                    )
-                    .unwrap(),
-                );
-                let resp_len = resp_body.len();
-                let response = tiny_http::Response::new(
-                    tiny_http::StatusCode(400),
-                    headers,
-                    Cursor::new(resp_body.into_bytes()),
-                    Some(resp_len),
-                    None,
-                );
-                let _ = request.respond(response);
+                let _ = request.respond(json_response(400, resp_body));
                 continue;
             }
 
-            let response = tiny_http::Response::new(
-                tiny_http::StatusCode(404),
-                vec![cors_header],
-                io::empty(),
-                None,
-                None,
-            );
-            let _ = request.respond(response);
+            let _ = request.respond(empty_response(404));
         }
     });
 }
@@ -350,6 +295,7 @@ pub fn run() {
             let state = AppState {
                 figma_port: Mutex::new(37531),
                 settings: Mutex::new(settings),
+                http_client: reqwest::Client::new(),
             };
             app.manage(state);
 
