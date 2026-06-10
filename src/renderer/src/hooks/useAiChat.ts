@@ -17,6 +17,8 @@ import {
   summarizeLottieEditContext,
 } from '../engine/lottie-editor';
 
+type JsonObject = Record<string, unknown>;
+
 const SYSTEM_PROMPT = `OUTPUT CONTRACT
 You are a JSON generator, not a chat assistant.
 Your entire response must be one valid animation-spec.json object.
@@ -139,7 +141,7 @@ export function useAiChat() {
         setLottieOutput(lottie);
         addChatMessage({
           role: 'assistant',
-          content: `${usedFallback ? 'AI 修改操作不可用，已使用本地兜底编辑。' : '已直接编辑 Lottie 本体并生成动画文件。'}\n${summary}`,
+          content: `${usedFallback ? 'AI 修改操作不可用，已使用本地兜底编辑。' : '已直接编辑 Lottie 本体并生成动画文件。'}\n${summarizeLottieEditEffects(summary)}`,
         });
       } else if (sceneJson) {
         const messages = [
@@ -154,7 +156,7 @@ export function useAiChat() {
         setSpecJson(spec);
         addChatMessage({
           role: 'assistant',
-          content: `${usedFallback ? 'AI 返回的动画不可播放，已使用兜底动画。' : '已生成 animation-spec.json'}（${summarizeSpec(spec)}）`,
+          content: `${usedFallback ? 'AI 返回的动画不可播放，已使用兜底动画。' : '已生成 animation-spec.json'}（${summarizeSpec(spec)}）\n${summarizeSpecEffects(spec)}`,
         });
       }
     } catch (error) {
@@ -238,6 +240,79 @@ function parseAndApplyLottiePatch(
     const result = lottieEditFallback(lottieJson, userPrompt);
     return { ...result, usedFallback: true };
   }
+}
+
+function summarizeLottieEditEffects(summary: string): string {
+  const lines = summary.split('\n').map((line) => line.trim()).filter(Boolean);
+  if (!lines.length) return '添加的动画效果：\n- 已应用 Lottie 修改操作。';
+  return `添加的动画效果：\n${lines.map((line) => `- ${line.replace(/^[-•]\s*/, '')}`).join('\n')}`;
+}
+
+function summarizeSpecEffects(spec: unknown): string {
+  const root = asObject(spec);
+  const animations = Array.isArray(root.animations) ? root.animations : [];
+  const lines = animations
+    .map(summarizeSpecAnimation)
+    .filter(Boolean)
+    .slice(0, 10);
+
+  if (!lines.length) return '添加的动画效果：\n- 已生成关键帧动画。';
+
+  const overflow = animations.length > lines.length ? `\n- 另外还有 ${animations.length - lines.length} 个动画效果。` : '';
+  return `添加的动画效果：\n${lines.map((line) => `- ${line}`).join('\n')}${overflow}`;
+}
+
+function summarizeSpecAnimation(item: unknown): string {
+  const animation = asObject(item);
+  const target = valueAsString(animation.target) || '未命名目标';
+  const property = valueAsString(animation.property) || '属性';
+  const keyframes = Array.isArray(animation.keyframes) ? animation.keyframes.map(asObject) : [];
+  const first = keyframes[0];
+  const last = keyframes[keyframes.length - 1];
+  const startFrame = first ? numberValue(first.frame) : null;
+  const endFrame = last ? numberValue(last.frame) : null;
+  const frameText = startFrame !== null && endFrame !== null ? `，${formatNumber(startFrame)}-${formatNumber(endFrame)} 帧` : '';
+  const valueText = first && last ? `，从 ${formatSpecValue(first.value)} 到 ${formatSpecValue(last.value)}` : '';
+  const keyframeText = keyframes.length ? `，${keyframes.length} 个关键帧` : '';
+  return `${target}：添加${propertyLabel(property)}${frameText}${valueText}${keyframeText}`;
+}
+
+function propertyLabel(property: string): string {
+  const labels: Record<string, string> = {
+    position: '位移动画',
+    positionX: '横向位移动画',
+    positionY: '纵向位移动画',
+    scale: '缩放动画',
+    scaleX: '横向缩放动画',
+    scaleY: '纵向缩放动画',
+    rotation: '旋转动画',
+    opacity: '透明度动画',
+    anchorPoint: '锚点动画',
+    anchorX: '横向锚点动画',
+    anchorY: '纵向锚点动画',
+    skew: '倾斜动画',
+    skewAxis: '倾斜轴动画',
+    fillColor: '填充颜色动画',
+    fillOpacity: '填充透明度动画',
+    strokeColor: '描边颜色动画',
+    strokeOpacity: '描边透明度动画',
+    strokeWidth: '描边宽度动画',
+    trimStart: '路径起点裁剪动画',
+    trimEnd: '路径终点裁剪动画',
+    trimOffset: '路径裁剪偏移动画',
+    path: '路径锚点动画',
+  };
+  return labels[property] ?? `${property} 动画`;
+}
+
+function formatSpecValue(value: unknown): string {
+  if (typeof value === 'number') return formatNumber(value);
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return `[${value.slice(0, 4).map(formatSpecValue).join(', ')}${value.length > 4 ? ', ...' : ''}]`;
+  const object = asObject(value);
+  if (Array.isArray(object.v)) return `路径 ${object.v.length} 个锚点`;
+  if (Object.keys(object).length) return JSON.stringify(object).slice(0, 80);
+  return '-';
 }
 
 function requestBody(
@@ -349,6 +424,26 @@ function shouldRetryWithoutJsonFormat(message: string): boolean {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error || '未知错误');
+}
+
+function asObject(value: unknown): JsonObject {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : {};
+}
+
+function valueAsString(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number') return String(value);
+  return '';
+}
+
+function numberValue(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value))) return Number(value);
+  return null;
+}
+
+function formatNumber(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/, '');
 }
 
 function extractAIContent(data: ChatResponse | unknown): string {
