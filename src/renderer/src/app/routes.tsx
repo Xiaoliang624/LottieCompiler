@@ -30,6 +30,7 @@ import { useAiChat } from '../hooks/useAiChat';
 import { LottiePreview } from '../components/LottiePreview';
 import { normalizeAnimationSpec, summarizeSpec } from '../engine/animation-spec';
 import { inferDuration } from '../engine/engine-bridge';
+import { isLottieJson } from '../engine/lottie-editor';
 
 type JsonDropHandler = (json: object, name: string) => void;
 type JsonDropErrorHandler = (message: string) => void;
@@ -130,9 +131,11 @@ const CompilerPage = () => {
     const filePath = await openFileDialog(jsonFilters);
     if (!filePath) return;
     try {
-      store.setSceneJson(await readJsonFile(filePath), filePath);
+      const json = await readJsonFile(filePath);
+      if (isLottieJson(json)) store.setLottieSourceJson(json, filePath);
+      else store.setSceneJson(json, filePath);
     } catch (error) {
-      store.setCompileError(error instanceof Error ? error.message : '加载 scene.json 失败。');
+      store.setCompileError(error instanceof Error ? error.message : '加载 JSON 失败。');
     }
   };
 
@@ -152,12 +155,16 @@ const CompilerPage = () => {
     setAiInput('');
   };
 
-  const handleSceneDrop = createJsonDropHandler((json, name) => store.setSceneJson(json, name), store.setCompileError);
+  const handleSceneDrop = createJsonDropHandler((json, name) => {
+    if (isLottieJson(json)) store.setLottieSourceJson(json, name);
+    else store.setSceneJson(json, name);
+  }, store.setCompileError);
   const handleSpecDrop = createJsonDropHandler(
     (json, name) => store.setSpecJson(normalizeAnimationSpec(json, store.sceneJson), name),
     store.setCompileError
   );
-  const canGenerate = Boolean(store.sceneJson && store.specJson && !store.isCompiling);
+  const isLottieEditMode = Boolean(store.lottieSourceJson);
+  const canGenerate = Boolean((store.lottieSourceJson || (store.sceneJson && store.specJson)) && !store.isCompiling);
 
   return (
     <div className="page-content h-full flex flex-col bg-transparent p-6 overflow-y-auto animate-in fade-in duration-300">
@@ -168,12 +175,12 @@ const CompilerPage = () => {
         status={statusText(store.compileError, store.compileSuccess)}
         canDownload={Boolean(store.lottieOutput)}
         canGenerate={canGenerate}
-        generateLabel="生成动画"
+        generateLabel={isLottieEditMode ? '预览本体' : '生成动画'}
         onDownload={downloadLottie(store)}
         onGenerate={compile}
       />
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 flex-1 min-h-0">
+      <div className="grid grid-cols-2 gap-6 flex-1 min-h-0">
         <div className="flex flex-col gap-6 min-h-0">
           <div className="bg-white dark:bg-neutral-900 rounded-2xl p-5 shadow-sm border border-neutral-100 dark:border-neutral-800 flex-1 flex flex-col min-h-0">
             <div className="flex items-center justify-between mb-4 shrink-0">
@@ -191,44 +198,48 @@ const CompilerPage = () => {
 
             <div className="space-y-4 mb-6 shrink-0">
               <FilePickerCard
-                title="scene.json"
-                subtitle={store.sceneFilePath ? fileName(store.sceneFilePath) : '选择或拖入 scene 文件'}
-                active={Boolean(store.sceneJson)}
+                title="scene.json / lottie.json"
+                subtitle={store.lottieSourceFilePath ? fileName(store.lottieSourceFilePath) : (store.sceneFilePath ? fileName(store.sceneFilePath) : '选择或拖入 scene 或 Lottie 文件')}
+                active={Boolean(store.sceneJson || store.lottieSourceJson)}
                 onSelect={handleSelectSceneJson}
                 onDrop={handleSceneDrop}
               />
 
-              <FilePickerCard
-                title="animation-spec.json"
-                subtitle={store.specJson ? summarizeSpec(store.specJson) : '选择、拖入或生成 spec'}
-                active={Boolean(store.specJson)}
-                onSelect={handleSelectSpecJson}
-                onDrop={handleSpecDrop}
-                extra={
-                  <>
-                    <button
-                      onClick={downloadSpec(store)}
-                      disabled={!store.specJson}
-                      className="p-1 rounded-md text-neutral-400 hover:text-blue-500 disabled:opacity-30 disabled:hover:text-neutral-400"
-                      title="下载 animation-spec.json"
-                    >
-                      <Download className="w-4 h-4" />
-                    </button>
-                    <button
-                    onClick={store.undoSingleSpec}
-                    disabled={store.specHistory.length === 0}
-                    className="p-1 rounded-md text-neutral-400 hover:text-blue-500 disabled:opacity-30 disabled:hover:text-neutral-400"
-                    title="恢复上一版生成的 spec"
-                  >
-                    <Undo2 className="w-4 h-4" />
-                    </button>
-                  </>
-                }
-              />
+              {!isLottieEditMode && (
+                <FilePickerCard
+                  title="animation-spec.json"
+                  subtitle={store.specJson ? summarizeSpec(store.specJson) : '选择、拖入或生成 spec'}
+                  active={Boolean(store.specJson)}
+                  onSelect={handleSelectSpecJson}
+                  onDrop={handleSpecDrop}
+                  extra={
+                    <>
+                      <button
+                        onClick={downloadSpec(store)}
+                        disabled={!store.specJson}
+                        className="p-1 rounded-md text-neutral-400 hover:text-blue-500 disabled:opacity-30 disabled:hover:text-neutral-400"
+                        title="下载 animation-spec.json"
+                      >
+                        <Download className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={store.undoSingleSpec}
+                        disabled={store.specHistory.length === 0}
+                        className="p-1 rounded-md text-neutral-400 hover:text-blue-500 disabled:opacity-30 disabled:hover:text-neutral-400"
+                        title="恢复上一版生成的 spec"
+                      >
+                        <Undo2 className="w-4 h-4" />
+                      </button>
+                    </>
+                  }
+                />
+              )}
             </div>
 
             <div className="flex items-center justify-between mb-3 px-1 shrink-0">
-              <h4 className="text-sm font-bold text-neutral-800 dark:text-neutral-200">用 AI 生成 animation-spec.json</h4>
+              <h4 className="text-sm font-bold text-neutral-800 dark:text-neutral-200">
+                {isLottieEditMode ? '用 AI 直接编辑 Lottie 本体' : '用 AI 生成 animation-spec.json'}
+              </h4>
               {store.isAiThinking && <span className="text-xs text-blue-500">思考中...</span>}
             </div>
 
@@ -237,7 +248,9 @@ const CompilerPage = () => {
                 {store.chatMessages.length === 0 ? (
                   <div className="h-full flex flex-col items-center justify-center text-center">
                     <Sparkles className="w-6 h-6 text-blue-400 dark:text-blue-500 mb-3" />
-                    <p className="text-sm text-neutral-500 dark:text-neutral-400">描述你想生成的动效。</p>
+                    <p className="text-sm text-neutral-500 dark:text-neutral-400">
+                      {isLottieEditMode ? '描述要在当前 Lottie 本体上修改的动画。' : '描述你想生成的动效。'}
+                    </p>
                   </div>
                 ) : (
                   store.chatMessages.map((message) => (
@@ -310,7 +323,7 @@ const StyleCodePage = () => {
         onGenerate={compile}
       />
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 flex-1 min-h-0">
+      <div className="grid grid-cols-2 gap-6 flex-1 min-h-0">
         <div className="bg-white dark:bg-neutral-900 rounded-2xl p-5 shadow-sm border border-neutral-100 dark:border-neutral-800 flex flex-col min-h-0 gap-4">
           <div className="flex items-center justify-between mb-4 shrink-0">
             <div className="flex items-center gap-2 text-neutral-900 dark:text-white font-medium">
@@ -398,7 +411,7 @@ const TopActionBar = ({
   onDownload: () => void;
   onGenerate: () => void;
 }) => (
-  <div className="bg-white dark:bg-neutral-900 rounded-xl p-4 shadow-sm border border-neutral-100 dark:border-neutral-800 flex flex-wrap items-center justify-between gap-4 mb-6 ml-10 md:ml-0 transition-all shrink-0">
+  <div className="px-1 flex flex-wrap items-center justify-between gap-4 mb-6 ml-10 md:ml-0 transition-all shrink-0">
     <div className="flex items-start gap-3">
       <div className="mt-0.5 w-5 h-5 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-full flex items-center justify-center shrink-0">
         <Info className="w-3 h-3" />
@@ -547,6 +560,8 @@ const SidebarItem = ({ icon: Icon, label, path }: { icon: React.ElementType; lab
 
 const RootLayout = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isAutoSidebarCollapsed, setIsAutoSidebarCollapsed] = useState(false);
+  const [hasManualSidebarChoice, setHasManualSidebarChoice] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const navigate = useNavigate();
   const setMode = useCompilerStore((state) => state.setMode);
@@ -566,6 +581,44 @@ const RootLayout = () => {
     return () => dispose?.();
   }, [navigate, setMode, setSceneJson]);
 
+  useEffect(() => {
+    const collapseWidth = 980;
+    const expandWidth = 1120;
+
+    const syncSidebarToWindow = () => {
+      const width = window.innerWidth;
+      if (hasManualSidebarChoice) {
+        if (width > expandWidth) setHasManualSidebarChoice(false);
+        return;
+      }
+      if (width < collapseWidth && isSidebarOpen) {
+        setIsSidebarOpen(false);
+        setIsAutoSidebarCollapsed(true);
+        return;
+      }
+      if (width > expandWidth && isAutoSidebarCollapsed && !isSidebarOpen) {
+        setIsSidebarOpen(true);
+        setIsAutoSidebarCollapsed(false);
+      }
+    };
+
+    syncSidebarToWindow();
+    window.addEventListener('resize', syncSidebarToWindow);
+    return () => window.removeEventListener('resize', syncSidebarToWindow);
+  }, [hasManualSidebarChoice, isAutoSidebarCollapsed, isSidebarOpen]);
+
+  const closeSidebarManually = () => {
+    setIsSidebarOpen(false);
+    setIsAutoSidebarCollapsed(false);
+    setHasManualSidebarChoice(true);
+  };
+
+  const openSidebarManually = () => {
+    setIsSidebarOpen(true);
+    setIsAutoSidebarCollapsed(false);
+    setHasManualSidebarChoice(true);
+  };
+
   return (
     <div className="app-window h-screen flex flex-col bg-[#E5E7EB] dark:bg-neutral-950 font-sans overflow-hidden">
       <div className="flex flex-1 min-h-0 bg-[#E5E7EB] dark:bg-neutral-950 bg-[radial-gradient(ellipse_at_top_left,_var(--tw-gradient-stops))] from-white dark:from-neutral-900 to-[#E5E7EB] dark:to-neutral-950 overflow-hidden relative">
@@ -575,7 +628,7 @@ const RootLayout = () => {
         style={{ minWidth: isSidebarOpen ? '16rem' : '0' }}
       >
         <div className="px-4 mb-4 flex justify-end items-center w-64 h-12 shrink-0">
-          <button onClick={() => setIsSidebarOpen(false)} className="text-neutral-400 dark:text-neutral-500 hover:text-neutral-600 dark:hover:text-neutral-300 p-1 rounded-md">
+          <button onClick={closeSidebarManually} className="text-neutral-400 dark:text-neutral-500 hover:text-neutral-600 dark:hover:text-neutral-300 p-1 rounded-md">
             <PanelLeftClose className="w-4 h-4" />
           </button>
         </div>
@@ -602,7 +655,7 @@ const RootLayout = () => {
         {!isSidebarOpen && (
           <div className="absolute top-4 left-4 z-30">
             <button
-              onClick={() => setIsSidebarOpen(true)}
+              onClick={openSidebarManually}
               className="p-2 bg-white dark:bg-neutral-800 rounded-lg shadow-sm border border-neutral-100 dark:border-neutral-700 text-neutral-500 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white"
             >
               <Menu className="w-4 h-4" />
@@ -612,7 +665,7 @@ const RootLayout = () => {
         <Outlet />
       </main>
 
-      {isSidebarOpen && <div className="fixed inset-0 bg-black/20 dark:bg-black/40 z-10 md:hidden" onClick={() => setIsSidebarOpen(false)} />}
+      {isSidebarOpen && <div className="fixed inset-0 bg-black/20 dark:bg-black/40 z-10 md:hidden" onClick={closeSidebarManually} />}
 
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
       </div>

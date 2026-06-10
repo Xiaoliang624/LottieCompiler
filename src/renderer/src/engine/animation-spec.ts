@@ -3,6 +3,8 @@ type JsonObject = Record<string, unknown>;
 type ScenePromptNode = {
   id: string;
   name: string;
+  targetHint: string;
+  duplicateNameCount: number;
   type: string;
   sourceType: string;
   parent: string;
@@ -20,6 +22,9 @@ type ScenePromptNode = {
   hasStroke: boolean;
   hasFillGeometry: boolean;
   hasStrokeGeometry: boolean;
+  hasVectorPath: boolean;
+  pathSummary?: JsonObject;
+  lottieTransform?: JsonObject;
   hasImageAsset: boolean;
   isMask: boolean;
   isRootFrame: boolean;
@@ -230,6 +235,7 @@ function lottieSizeKb(output: unknown): number | null {
 
 export function scenePromptContext(scene: unknown, focusText = '', limit = 90): string {
   const allNodes = collectSceneNodes(scene);
+  const nameCounts = sceneNameCounts(allNodes);
   const focusedNodes = focusedSceneNodes(allNodes, focusText);
   const sourceNodes = focusedNodes.length ? focusedNodes : allNodes;
   const nodes = sourceNodes.slice(0, limit);
@@ -241,10 +247,12 @@ export function scenePromptContext(scene: unknown, focusText = '', limit = 90): 
     contextMode: focusedNodes.length ? 'focused-nodes' : 'first-nodes',
     nodesIncluded: nodes.length,
     truncated: sourceNodes.length > nodes.length,
-    targetRule: 'Use a targetable node id or exact node name. Do not target the root frame/canvas when targetable is false.',
+    targetRule: 'Use a targetable node id when possible. If duplicateNameCount is greater than 1, prefer id or targetHint. Do not target the root frame/canvas when targetable is false.',
     nodes: nodes.map((node) => ({
       id: node.id,
       name: node.name,
+      targetHint: node.targetHint,
+      duplicateNameCount: nameCounts.get(node.name) ?? 0,
       type: node.type,
       sourceType: node.sourceType,
       parent: node.parent,
@@ -262,6 +270,9 @@ export function scenePromptContext(scene: unknown, focusText = '', limit = 90): 
       hasStroke: node.hasStroke,
       hasFillGeometry: node.hasFillGeometry,
       hasStrokeGeometry: node.hasStrokeGeometry,
+      hasVectorPath: node.hasVectorPath,
+      pathSummary: node.pathSummary,
+      lottieTransform: node.lottieTransform,
       hasImageAsset: node.hasImageAsset,
       isMask: node.isMask,
       targetable: isTargetableSceneNode(node),
@@ -756,6 +767,8 @@ function collectSceneNodes(scene: unknown, depth = 0, parent = '', forceRootFram
   const current = id || name ? [{
     id: id || name,
     name,
+    targetHint: name && id && name !== id ? `${name} (${id})` : (id || name),
+    duplicateNameCount: 0,
     type: valueAsString(node.type ?? node.figmaType ?? node.sourceType),
     sourceType: valueAsString(node.sourceType ?? node.figmaType),
     parent,
@@ -773,6 +786,9 @@ function collectSceneNodes(scene: unknown, depth = 0, parent = '', forceRootFram
     hasStroke: nonEmptyArray(node.strokes),
     hasFillGeometry: nonEmptyArray(node.fillGeometry),
     hasStrokeGeometry: nonEmptyArray(node.strokeGeometry),
+    hasVectorPath: nonEmptyArray(node.vectorPaths),
+    pathSummary: scenePathSummary(node),
+    lottieTransform: summarizeLottieTransform(node.lottieTransform),
     hasImageAsset: Boolean(asObject(node.imageAsset).id || asObject(node.imageAsset).p),
     isMask: Boolean(node.isMask),
     isRootFrame: forceRootFrame || (depth === 0 && children.length > 0),
@@ -782,6 +798,165 @@ function collectSceneNodes(scene: unknown, depth = 0, parent = '', forceRootFram
     ...current,
     ...children.flatMap((child) => collectSceneNodes(child, depth + 1, currentName, false)),
   ];
+}
+
+function sceneNameCounts(nodes: ScenePromptNode[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const node of nodes) {
+    if (!node.name) continue;
+    counts.set(node.name, (counts.get(node.name) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function summarizeLottieTransform(value: unknown): JsonObject | undefined {
+  const transform = asObject(value);
+  const ks = asObject(transform.ks);
+  if (!Object.keys(transform).length && !Object.keys(ks).length) return undefined;
+  return {
+    positionMode: valueAsString(transform.positionMode),
+    coordinateSpace: valueAsString(transform.coordinateSpace),
+    parentCenterX: numberValue(transform.parentCenterX),
+    parentCenterY: numberValue(transform.parentCenterY),
+    positionX: numberValue(transform.positionX),
+    positionY: numberValue(transform.positionY),
+    ks: Object.keys(ks).length ? ks : undefined,
+  };
+}
+
+function scenePathSummary(node: JsonObject): JsonObject | undefined {
+  const fill = firstArray(node.fillGeometry)[0];
+  const vector = firstArray(node.vectorPaths)[0];
+  const stroke = firstArray(node.strokeGeometry)[0];
+  const source = fill ?? vector ?? stroke;
+  const data = valueAsString(asObject(source).data);
+  if (!data) return undefined;
+  const parsed = parseSvgPathSummary(data, numberValue(node.width) ?? 0, numberValue(node.height) ?? 0);
+  return {
+    source: source === fill ? 'fillGeometry' : (source === stroke ? 'strokeGeometry' : 'vectorPaths'),
+    dataPreview: data.slice(0, 500),
+    ...parsed,
+  };
+}
+
+function parseSvgPathSummary(data: string, width: number, height: number): JsonObject {
+  const tokens = data.match(/[MLCQZmlcqz]|-?\d*\.?\d+(?:e[-+]?\d+)?/g);
+  if (!tokens) return { vertexCount: 0 };
+
+  const points: number[][] = [];
+  const inTangents: number[][] = [];
+  const outTangents: number[][] = [];
+  let command = '';
+  let index = 0;
+  let current = [0, 0];
+  let start = [0, 0];
+  let closed = false;
+  const centerX = width / 2;
+  const centerY = height / 2;
+
+  const isCommand = (token: string) => /^[MLCQZmlcqz]$/.test(token);
+  const readNumber = () => parseFloat(tokens[index++]);
+  const toLocal = (point: number[]) => [roundNumber(point[0] - centerX), roundNumber(point[1] - centerY)];
+
+  while (index < tokens.length) {
+    if (isCommand(tokens[index])) command = tokens[index++];
+    switch (command) {
+      case 'M':
+      case 'm': {
+        const x = readNumber();
+        const y = readNumber();
+        current = command === 'm' ? [current[0] + x, current[1] + y] : [x, y];
+        start = current.slice();
+        points.push(toLocal(current));
+        inTangents.push([0, 0]);
+        outTangents.push([0, 0]);
+        command = command === 'm' ? 'l' : 'L';
+        break;
+      }
+      case 'L':
+      case 'l': {
+        const x = readNumber();
+        const y = readNumber();
+        current = command === 'l' ? [current[0] + x, current[1] + y] : [x, y];
+        points.push(toLocal(current));
+        inTangents.push([0, 0]);
+        outTangents.push([0, 0]);
+        break;
+      }
+      case 'C':
+      case 'c': {
+        const x1 = readNumber();
+        const y1 = readNumber();
+        const x2 = readNumber();
+        const y2 = readNumber();
+        const x = readNumber();
+        const y = readNumber();
+        const control1 = command === 'c' ? [current[0] + x1, current[1] + y1] : [x1, y1];
+        const control2 = command === 'c' ? [current[0] + x2, current[1] + y2] : [x2, y2];
+        const end = command === 'c' ? [current[0] + x, current[1] + y] : [x, y];
+        outTangents[outTangents.length - 1] = [roundNumber(control1[0] - current[0]), roundNumber(control1[1] - current[1])];
+        points.push(toLocal(end));
+        inTangents.push([roundNumber(control2[0] - end[0]), roundNumber(control2[1] - end[1])]);
+        outTangents.push([0, 0]);
+        current = end;
+        break;
+      }
+      case 'Q':
+      case 'q': {
+        const qx = readNumber();
+        const qy = readNumber();
+        const x = readNumber();
+        const y = readNumber();
+        const control = command === 'q' ? [current[0] + qx, current[1] + qy] : [qx, qy];
+        const end = command === 'q' ? [current[0] + x, current[1] + y] : [x, y];
+        outTangents[outTangents.length - 1] = [
+          roundNumber((2 / 3) * (control[0] - current[0])),
+          roundNumber((2 / 3) * (control[1] - current[1])),
+        ];
+        points.push(toLocal(end));
+        inTangents.push([
+          roundNumber((2 / 3) * (control[0] - end[0])),
+          roundNumber((2 / 3) * (control[1] - end[1])),
+        ]);
+        outTangents.push([0, 0]);
+        current = end;
+        break;
+      }
+      case 'Z':
+      case 'z':
+        closed = true;
+        current = start.slice();
+        if (index < tokens.length && !isCommand(tokens[index])) command = 'L';
+        break;
+      default:
+        index += 1;
+        break;
+    }
+  }
+
+  if (closed && points.length > 1 && pointsEqual(points[0], points[points.length - 1])) {
+    inTangents[0] = inTangents[inTangents.length - 1];
+    points.pop();
+    inTangents.pop();
+    outTangents.pop();
+  }
+
+  return {
+    vertexCount: points.length,
+    closed,
+    v: points.slice(0, 12),
+    i: inTangents.slice(0, 12),
+    o: outTangents.slice(0, 12),
+    truncated: points.length > 12,
+  };
+}
+
+function pointsEqual(a: number[], b: number[]): boolean {
+  return Math.abs(a[0] - b[0]) < 0.001 && Math.abs(a[1] - b[1]) < 0.001;
+}
+
+function roundNumber(value: number): number {
+  return Math.round(value * 1000) / 1000;
 }
 
 function hasAnimatedProperty(value: unknown, seen: Set<unknown>): boolean {

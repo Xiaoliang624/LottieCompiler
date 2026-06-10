@@ -16,6 +16,8 @@ export interface CompilerState {
   mode: CompilerMode;
   sceneJson: object | null;
   sceneFilePath: string | null;
+  lottieSourceJson: object | null;
+  lottieSourceFilePath: string | null;
   specJson: object | null;
   specFilePath: string | null;
   specHistory: object[];
@@ -39,6 +41,7 @@ export interface CompilerState {
 export interface CompilerActions {
   setMode: (mode: CompilerMode) => void;
   setSceneJson: (json: object, filePath?: string) => void;
+  setLottieSourceJson: (json: object, filePath?: string) => void;
   setSpecJson: (json: object, filePath?: string) => void;
   pushSpecHistory: (json: object) => void;
   undoSingleSpec: () => void;
@@ -67,6 +70,8 @@ export const useCompilerStore = create<CompilerStore>((set, get) => ({
   mode: 'json',
   sceneJson: null,
   sceneFilePath: null,
+  lottieSourceJson: null,
+  lottieSourceFilePath: null,
   specJson: null,
   specFilePath: null,
   specHistory: [],
@@ -94,9 +99,23 @@ export const useCompilerStore = create<CompilerStore>((set, get) => ({
   setSceneJson: (json, filePath) => set({
     sceneJson: json,
     sceneFilePath: filePath ?? null,
+    lottieSourceJson: null,
+    lottieSourceFilePath: null,
     lottieOutput: null,
     compileError: null,
     compileSuccess: false,
+  }),
+  setLottieSourceJson: (json, filePath) => set({
+    lottieSourceJson: json,
+    lottieSourceFilePath: filePath ?? null,
+    sceneJson: null,
+    sceneFilePath: null,
+    specJson: null,
+    specFilePath: null,
+    specHistory: [],
+    lottieOutput: json,
+    compileError: null,
+    compileSuccess: true,
   }),
   setSpecJson: (json, filePath) => {
     const current = get().specJson;
@@ -125,6 +144,8 @@ export const useCompilerStore = create<CompilerStore>((set, get) => ({
   clearScene: () => set({
     sceneJson: null,
     sceneFilePath: null,
+    lottieSourceJson: null,
+    lottieSourceFilePath: null,
     specJson: null,
     specFilePath: null,
     specHistory: [],

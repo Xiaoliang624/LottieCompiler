@@ -12,6 +12,7 @@ export function useCompiler() {
   const {
     mode,
     sceneJson,
+    lottieSourceJson,
     specJson,
     cssCode,
     parseMode,
@@ -32,6 +33,10 @@ export function useCompiler() {
 
       switch (mode) {
         case 'json': {
+          if (lottieSourceJson) {
+            output = lottieSourceJson;
+            break;
+          }
           if (!sceneJson || !specJson) {
             throw new Error('请先加载 scene.json 和 animation-spec.json。');
           }
@@ -79,6 +84,7 @@ export function useCompiler() {
   }, [
     mode,
     sceneJson,
+    lottieSourceJson,
     specJson,
     cssCode,
     parseMode,
